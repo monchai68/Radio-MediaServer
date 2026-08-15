@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Internet Radio</title>
+
+<link rel="stylesheet"
+href="/static/style.css?v=20260815a">
+
+</head>
+
+
+<body>
+
+<div class="radio">
+
+<h1>🎵 Internet Radio</h1>
+
+<div class="mode-selector">
+<button id="modeRadioBtn" class="mode-btn active" onclick="setMode('radio')">📻 Radio</button>
+<button id="modeMediaBtn" class="mode-btn" onclick="setMode('media_server')">🎵 Media Server</button>
+</div>
+
+<div id="station">
+Loading...
+</div>
+
+<div id="statusText" class="status-text">
+Ready
+</div>
+
+<div class="now-playing">
+<div id="songTitle" class="now-line"><span class="now-label">Song:</span> <span id="songTitleValue" class="now-value">-</span></div>
+<div id="songArtist" class="now-line"><span class="now-label">Artist:</span> <span id="songArtistValue" class="now-value">-</span></div>
+</div>
+
+<div class="control-grid">
+<button id="playBtn" class="control-btn" onclick="togglePlay()">
+▶ PLAY
+</button>
+
+<button class="control-btn" onclick="stopRadio()">
+■ STOP
+</button>
+
+<button class="control-btn" onclick="prevStation()">
+⏮ PREV
+</button>
+
+<button class="control-btn" onclick="nextStation()">
+NEXT ⏭
+</button>
+
+<button class="control-btn power-btn" onclick="powerOff()">
+⏻ Power Off
+</button>
+
+<button class="control-btn refresh-btn" onclick="refreshPage()">
+↻ REFRESH
+</button>
+</div>
+
+
+<p>Volume</p>
+
+<div id="volumeValue">100%</div>
+
+<div class="volume-row">
+<button class="volume-step-btn" onclick="decreaseVolume()">-</button>
+
+<input
+type="range"
+min="0"
+max="100"
+value="100"
+id="volumeSlider"
+onchange="setVolume(this.value)">
+
+<button class="volume-step-btn" onclick="increaseVolume()">+</button>
+</div>
+
+<div id="radioSection" class="mode-section">
+<h3>Categories</h3>
+
+<div id="categories" class="categories-scroll"></div>
+
+<div class="manage-buttons">
+<button class="manage-toggle-btn" onclick="openManageCategoriesModal()">Manage Categories</button>
+<button id="manageStationsBtn" class="manage-toggle-btn" onclick="openManageStationsModal()">Manage Stations</button>
+</div>
+
+<h3>Stations</h3>
+
+<div id="stations"></div>
+</div>
+
+<div id="mediaSection" class="mode-section hidden">
+<h3>Media Servers</h3>
+
+<div class="manage-buttons">
+<button class="manage-toggle-btn" onclick="refreshDlnaServers()">Refresh Servers</button>
+<button class="manage-toggle-btn" onclick="goDlnaHome()">Go Home</button>
+</div>
+
+<div id="dlnaServers"></div>
+
+<h3>Browse</h3>
+<div id="dlnaBreadcrumb" class="categories-scroll"></div>
+<button id="dlnaUpBtn" class="dlna-up-btn hidden" onclick="goUpDlnaLevel()"><img src="/static/icons/up-arrow.svg" alt="Up"></button>
+<div id="dlnaItems"></div>
+</div>
+
+<div id="manageCategoriesModal" class="modal hidden">
+<div class="modal-card">
+<h4>Manage Categories</h4>
+<div class="manager-grid">
+<div id="selectedCategoryName" class="modal-note">Selected: -</div>
+<input id="newCategoryName" type="text" placeholder="Add new category">
+<button onclick="addCategory()">Add Category</button>
+<input id="renameCategoryName" type="text" placeholder="Rename selected category">
+</div>
+<div class="modal-actions">
+<button onclick="renameSelectedCategory()">Save Name</button>
+<button onclick="deleteSelectedCategory()">Delete Selected</button>
+</div>
+<div class="modal-actions single">
+<button onclick="closeManageCategoriesModal()">Close</button>
+</div>
+</div>
+</div>
+
+<div id="manageStationsModal" class="modal hidden">
+<div class="modal-card">
+<h4>Manage Stations</h4>
+<div id="manageStationsTitle" class="modal-note">Category: -</div>
+<div class="manager-grid">
+<input id="newStationName" type="text" placeholder="Station name">
+<input id="newStationUrl" type="text" placeholder="Stream URL">
+<button onclick="addStationToSelectedCategory()">Add Station</button>
+</div>
+<div id="stationAdminList" class="admin-list"></div>
+<div class="modal-actions single">
+<button onclick="closeManageStationsModal()">Close</button>
+</div>
+</div>
+</div>
+
+<div id="editStationModal" class="modal hidden">
+<div class="modal-card">
+<h4>Edit Station</h4>
+<div class="manager-grid">
+<input id="editStationName" type="text" placeholder="Station name">
+<input id="editStationUrl" type="text" placeholder="Stream URL">
+<select id="editStationCategory"></select>
+</div>
+<div class="modal-actions">
+<button onclick="saveEditStation()">Save</button>
+<button onclick="closeEditStationModal()">Cancel</button>
+</div>
+</div>
+</div>
+
+
+</div>
+
+
+<script src="/static/app.js?v=20260815a"></script>
+
+</body>
+
+</html>

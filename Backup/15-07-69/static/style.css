@@ -1,0 +1,162 @@
+body {
+
+background:#202020;
+
+font-family:
+Arial;
+
+color:white;
+
+text-align:center;
+
+}
+
+
+.radio {
+
+margin:30px auto;
+
+max-width:400px;
+
+background:#333;
+
+padding:25px;
+
+border-radius:20px;
+
+}
+
+.status-text {
+margin-top: 6px;
+margin-bottom: 12px;
+color: #b7e4c7;
+font-size: 14px;
+}
+
+.now-playing {
+margin-top: 4px;
+margin-bottom: 14px;
+font-size: 20px;
+min-height: 36px;
+}
+
+.now-line {
+line-height: 1.4;
+}
+
+.now-label {
+color: #ffd166;
+}
+
+.now-value {
+color: #9ad1ff;
+}
+
+
+button {
+
+font-size:20px;
+
+padding:15px 30px;
+
+margin:10px;
+
+border-radius:10px;
+
+}
+
+.control-grid {
+display: grid;
+grid-template-columns: repeat(2, minmax(0, 1fr));
+gap: 14px;
+margin: 8px 0 18px;
+}
+
+.control-btn {
+margin: 0;
+width: 100%;
+min-height: 84px;
+font-size: 20px;
+padding: 0;
+display: inline-flex;
+align-items: center;
+justify-content: center;
+letter-spacing: 0.2px;
+}
+
+#playBtn {
+grid-column: 1;
+grid-row: 1;
+}
+
+.control-btn:nth-of-type(2) {
+grid-column: 2;
+grid-row: 1;
+}
+
+.control-btn:nth-of-type(3) {
+grid-column: 1;
+grid-row: 2;
+}
+
+.control-btn:nth-of-type(4) {
+grid-column: 2;
+grid-row: 2;
+}
+
+#volumeValue {
+font-size: 16px;
+margin-bottom: 4px;
+color: #9ad1ff;
+}
+
+.volume-row {
+display: flex;
+align-items: center;
+justify-content: center;
+gap: 10px;
+}
+
+#volumeSlider {
+flex: 1;
+max-width: 250px;
+}
+
+.volume-step-btn {
+font-size: 24px;
+padding: 8px 16px;
+line-height: 1;
+min-width: 48px;
+}
+
+
+.station {
+
+background:#555;
+
+padding:15px;
+
+margin:10px;
+
+border-radius:10px;
+
+}
+
+.station.active {
+background: #0b7285;
+font-weight: 700;
+}
+
+.power-btn {
+grid-column: 1 / span 2;
+grid-row: 3;
+justify-self: center;
+max-width: 280px;
+}
+
+@media (max-width: 480px) {
+.control-btn {
+font-size: 18px;
+min-height: 72px;
+}
+}

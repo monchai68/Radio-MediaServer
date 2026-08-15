@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Internet Radio</title>
+
+<link rel="stylesheet"
+href="/static/style.css">
+
+</head>
+
+
+<body>
+
+<div class="radio">
+
+<h1>🎵 Internet Radio</h1>
+
+<div id="station">
+Loading...
+</div>
+
+<div id="statusText" class="status-text">
+Ready
+</div>
+
+<div class="now-playing">
+<div id="songTitle" class="now-line"><span class="now-label">Song:</span> <span id="songTitleValue" class="now-value">-</span></div>
+<div id="songArtist" class="now-line"><span class="now-label">Artist:</span> <span id="songArtistValue" class="now-value">-</span></div>
+</div>
+
+<div class="control-grid">
+<button id="playBtn" class="control-btn" onclick="togglePlay()">
+▶ PLAY
+</button>
+
+<button class="control-btn" onclick="stopRadio()">
+■ STOP
+</button>
+
+<button class="control-btn" onclick="prevStation()">
+⏮ PREV
+</button>
+
+<button class="control-btn" onclick="nextStation()">
+NEXT ⏭
+</button>
+
+<button class="control-btn power-btn" onclick="powerOff()">
+⏻ Power Off
+</button>
+</div>
+
+
+<p>Volume</p>
+
+<div id="volumeValue">100%</div>
+
+<div class="volume-row">
+<button class="volume-step-btn" onclick="decreaseVolume()">-</button>
+
+<input
+type="range"
+min="0"
+max="100"
+value="100"
+id="volumeSlider"
+onchange="setVolume(this.value)">
+
+<button class="volume-step-btn" onclick="increaseVolume()">+</button>
+</div>
+
+
+<h3>Stations</h3>
+
+<div id="stations"></div>
+
+
+</div>
+
+
+<script src="/static/app.js"></script>
+
+</body>
+
+</html>
