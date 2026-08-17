@@ -1039,3 +1039,338 @@ function bootstrap() {
 }
 
 bootstrap();
+
+let bluetoothScanInFlight = false;
+
+function openSettingsModal() {
+    document.getElementById("settingsModal").classList.remove("hidden");
+}
+
+function closeSettingsModal() {
+    document.getElementById("settingsModal").classList.add("hidden");
+}
+
+function renderBluetoothDevices(devices) {
+    const list = document.getElementById("bluetoothDeviceList");
+    if (!list) {
+        return;
+    }
+
+    if (!devices || devices.length === 0) {
+        list.innerHTML = "<div class=\"empty\">No devices found</div>";
+        return;
+    }
+
+    list.innerHTML = devices.map((d) => {
+        const statusClass = d.connected ? " connected" : "";
+        const statusText = d.connected ? "Connected" : (d.paired ? "Paired" : "Available");
+        const actionLabel = d.connected ? "Disconnect" : "Connect";
+        const actionFn = d.connected ? "disconnectBluetoothDevice" : "connectBluetoothDevice";
+        const safeMac = escapeHtml(d.mac);
+
+        return `
+<div class="admin-item">
+<div class="device-item-main">
+<span class="device-item-name">${escapeHtml(d.name)}</span>
+<span class="device-item-status${statusClass}" id="btStatus-${safeMac}">${statusText}</span>
+</div>
+<div class="admin-actions">
+<button id="btAction-${safeMac}" onclick="${actionFn}('${d.mac}')">${actionLabel}</button>
+</div>
+</div>`;
+    }).join("");
+}
+
+function loadBluetoothStatus() {
+    fetch("/api/bluetooth/status")
+        .then((r) => r.json())
+        .then((data) => {
+            const toggle = document.getElementById("bluetoothPowerToggle");
+            const note = document.getElementById("bluetoothNote");
+            const scanBtn = document.getElementById("bluetoothScanBtn");
+
+            if (toggle) {
+                toggle.checked = Boolean(data.powered);
+                toggle.disabled = !data.available;
+            }
+            if (scanBtn) {
+                scanBtn.disabled = !data.available || !data.powered;
+            }
+            if (note && !data.available) {
+                note.textContent = "Bluetooth is unavailable on this device.";
+            }
+        });
+}
+
+function loadBluetoothDevices() {
+    fetch("/api/bluetooth/devices")
+        .then((r) => r.json())
+        .then((data) => {
+            renderBluetoothDevices(data.devices || []);
+        });
+}
+
+function openBluetoothModal() {
+    closeSettingsModal();
+    document.getElementById("bluetoothModal").classList.remove("hidden");
+    loadBluetoothStatus();
+    loadBluetoothDevices();
+}
+
+function closeBluetoothModal() {
+    document.getElementById("bluetoothModal").classList.add("hidden");
+}
+
+function toggleBluetoothPower(powerOn) {
+    fetch("/api/bluetooth/power", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ power: powerOn })
+    })
+        .then((r) => r.json())
+        .then(() => {
+            loadBluetoothStatus();
+            loadBluetoothDevices();
+        });
+}
+
+function scanBluetoothDevices() {
+    if (bluetoothScanInFlight) {
+        return;
+    }
+
+    const scanBtn = document.getElementById("bluetoothScanBtn");
+    bluetoothScanInFlight = true;
+    if (scanBtn) {
+        scanBtn.disabled = true;
+        scanBtn.textContent = "Scanning...";
+    }
+
+    fetch("/api/bluetooth/scan", { method: "POST" })
+        .then((r) => r.json())
+        .then((data) => {
+            renderBluetoothDevices(data.devices || []);
+        })
+        .finally(() => {
+            bluetoothScanInFlight = false;
+            if (scanBtn) {
+                scanBtn.disabled = false;
+                scanBtn.textContent = "🔍 Scan for Devices";
+            }
+        });
+}
+
+function setBluetoothActionBusy(mac, label) {
+    const btn = document.getElementById("btAction-" + mac);
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = label;
+    }
+}
+
+function connectBluetoothDevice(mac) {
+    setBluetoothActionBusy(mac, "Connecting...");
+
+    fetch("/api/bluetooth/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mac: mac })
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data: data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                alert("Connect failed: " + (data.error || "unknown error"));
+            }
+        })
+        .catch(() => {
+            alert("Connect failed: request error");
+        })
+        .finally(() => {
+            loadBluetoothDevices();
+        });
+}
+
+function disconnectBluetoothDevice(mac) {
+    setBluetoothActionBusy(mac, "Disconnecting...");
+
+    fetch("/api/bluetooth/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mac: mac })
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data: data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                alert("Disconnect failed: " + (data.error || "unknown error"));
+            }
+        })
+        .catch(() => {
+            alert("Disconnect failed: request error");
+        })
+        .finally(() => {
+            loadBluetoothDevices();
+        });
+}
+
+let wifiScanInFlight = false;
+let wifiConnectTargetSsid = null;
+let wifiNetworks = [];
+
+function openWifiModal() {
+    closeSettingsModal();
+    document.getElementById("wifiModal").classList.remove("hidden");
+    cancelWifiConnect();
+    loadWifiStatus();
+    scanWifiNetworks();
+}
+
+function closeWifiModal() {
+    document.getElementById("wifiModal").classList.add("hidden");
+    cancelWifiConnect();
+}
+
+function loadWifiStatus() {
+    fetch("/api/wifi/status")
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data: data })))
+        .then(({ ok, data }) => {
+            const note = document.getElementById("wifiStatusNote");
+            if (!note) {
+                return;
+            }
+
+            if (!ok) {
+                note.textContent = "Error: " + (data.error || "failed to load status");
+            } else if (!data.available) {
+                note.textContent = "Wi-Fi is unavailable on this device.";
+            } else if (data.hotspot_active) {
+                note.textContent = "Setup hotspot active — connect a phone/computer to the Pi's own Wi-Fi to configure.";
+            } else if (data.connected) {
+                note.textContent = "Connected to " + data.ssid + (data.ip ? " (" + data.ip + ")" : "");
+            } else {
+                note.textContent = "Not connected to any Wi-Fi network.";
+            }
+        })
+        .catch(() => {
+            const note = document.getElementById("wifiStatusNote");
+            if (note) {
+                note.textContent = "Error: request failed (check server logs).";
+            }
+        });
+}
+
+function renderWifiNetworks() {
+    const list = document.getElementById("wifiNetworkList");
+    if (!list) {
+        return;
+    }
+
+    if (!wifiNetworks || wifiNetworks.length === 0) {
+        list.innerHTML = "<div class=\"empty\">No networks found</div>";
+        return;
+    }
+
+    list.innerHTML = wifiNetworks.map((n) => {
+        const lockIcon = n.secured ? "🔒" : "🔓";
+        const statusText = n.connected ? "Connected" : (n.saved ? "Saved" : "");
+        const statusClass = n.connected ? " connected" : "";
+        const safeSsid = escapeHtml(n.ssid).replace(/'/g, "\\'");
+
+        return `
+<div class="admin-item">
+<div class="device-item-main">
+<span class="device-item-name">${lockIcon} ${escapeHtml(n.ssid)}</span>
+<span class="device-item-status${statusClass}">${statusText || (n.signal + "%")}</span>
+</div>
+<div class="admin-actions">
+<button onclick="selectWifiNetwork('${safeSsid}', ${n.secured})">${n.connected ? "Reconnect" : "Connect"}</button>
+</div>
+</div>`;
+    }).join("");
+}
+
+function scanWifiNetworks() {
+    if (wifiScanInFlight) {
+        return;
+    }
+
+    const scanBtn = document.getElementById("wifiScanBtn");
+    wifiScanInFlight = true;
+    if (scanBtn) {
+        scanBtn.disabled = true;
+        scanBtn.textContent = "Scanning...";
+    }
+
+    fetch("/api/wifi/scan")
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data: data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                const list = document.getElementById("wifiNetworkList");
+                if (list) {
+                    list.innerHTML = "<div class=\"empty\">Scan failed: " + escapeHtml(data.error || "unknown error") + "</div>";
+                }
+                return;
+            }
+            wifiNetworks = data.networks || [];
+            renderWifiNetworks();
+        })
+        .catch(() => {
+            const list = document.getElementById("wifiNetworkList");
+            if (list) {
+                list.innerHTML = "<div class=\"empty\">Scan failed: request error</div>";
+            }
+        })
+        .finally(() => {
+            wifiScanInFlight = false;
+            if (scanBtn) {
+                scanBtn.disabled = false;
+                scanBtn.textContent = "🔍 Scan for Networks";
+            }
+        });
+}
+
+function selectWifiNetwork(ssid, secured) {
+    wifiConnectTargetSsid = ssid;
+    document.getElementById("wifiConnectSsid").textContent = "Connect to: " + ssid;
+
+    const passwordInput = document.getElementById("wifiPasswordInput");
+    passwordInput.value = "";
+    passwordInput.style.display = secured ? "" : "none";
+
+    document.getElementById("wifiConnectForm").classList.remove("hidden");
+}
+
+function cancelWifiConnect() {
+    wifiConnectTargetSsid = null;
+    const form = document.getElementById("wifiConnectForm");
+    if (form) {
+        form.classList.add("hidden");
+    }
+}
+
+function submitWifiConnect() {
+    if (!wifiConnectTargetSsid) {
+        return;
+    }
+
+    const password = document.getElementById("wifiPasswordInput").value;
+    const ssid = wifiConnectTargetSsid;
+
+    fetch("/api/wifi/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid: ssid, password: password })
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data: data })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                alert("Connect failed: " + (data.error || "unknown error"));
+                return;
+            }
+            cancelWifiConnect();
+            loadWifiStatus();
+            scanWifiNetworks();
+        })
+        .catch(() => {
+            alert("Connect failed: request error");
+        });
+}

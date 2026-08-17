@@ -450,3 +450,162 @@ grid-template-columns: 1fr;
 grid-template-columns: 1fr;
 }
 }
+
+.app-header {
+position: relative;
+display: flex;
+align-items: center;
+justify-content: center;
+}
+
+.app-header h1 {
+margin: 0;
+flex: 1;
+}
+
+.settings-btn {
+position: absolute;
+right: 0;
+top: 50%;
+transform: translateY(-50%);
+background: transparent;
+border: 0;
+font-size: 26px;
+padding: 4px 8px;
+margin: 0;
+line-height: 1;
+cursor: pointer;
+}
+
+.settings-list {
+display: grid;
+gap: 8px;
+}
+
+.settings-item {
+display: flex;
+align-items: center;
+justify-content: space-between;
+background: #3a3a3a;
+border: 0;
+border-radius: 10px;
+padding: 14px;
+margin: 0;
+font-size: 16px;
+color: #fff;
+width: 100%;
+box-sizing: border-box;
+}
+
+.settings-item:disabled {
+opacity: 0.55;
+cursor: not-allowed;
+}
+
+.settings-item-arrow {
+font-size: 20px;
+opacity: 0.7;
+}
+
+.settings-item-note {
+font-size: 12px;
+color: #9ad1ff;
+}
+
+.bluetooth-power-row {
+display: flex;
+align-items: center;
+justify-content: space-between;
+font-size: 16px;
+margin-bottom: 8px;
+}
+
+.toggle-switch {
+position: relative;
+display: inline-block;
+width: 50px;
+height: 28px;
+}
+
+.toggle-switch input {
+opacity: 0;
+width: 0;
+height: 0;
+}
+
+.toggle-slider {
+position: absolute;
+cursor: pointer;
+inset: 0;
+background: #666;
+border-radius: 999px;
+transition: 0.2s;
+}
+
+.toggle-slider::before {
+content: "";
+position: absolute;
+height: 22px;
+width: 22px;
+left: 3px;
+top: 3px;
+background: #fff;
+border-radius: 50%;
+transition: 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+background: #0b7285;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+transform: translateX(22px);
+}
+
+.toggle-switch input:disabled + .toggle-slider {
+opacity: 0.5;
+cursor: not-allowed;
+}
+
+.device-item-main {
+display: flex;
+flex-direction: column;
+text-align: left;
+gap: 2px;
+}
+
+.device-item-name {
+font-size: 15px;
+font-weight: 700;
+}
+
+.device-item-status {
+font-size: 12px;
+color: #9ad1ff;
+}
+
+.device-item-status.connected {
+color: #63e6be;
+}
+
+.wifi-connect-form {
+margin-top: 10px;
+display: grid;
+gap: 8px;
+}
+
+.wifi-connect-form.hidden {
+display: none;
+}
+
+.wifi-connect-form input {
+width: 100%;
+box-sizing: border-box;
+padding: 10px;
+border-radius: 8px;
+border: 1px solid #666;
+background: #2b2b2b;
+color: #fff;
+font-size: 14px;
+}
+

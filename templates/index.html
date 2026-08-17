@@ -9,7 +9,7 @@ content="width=device-width, initial-scale=1">
 <title>Internet Radio</title>
 
 <link rel="stylesheet"
-href="/static/style.css?v=20260815a">
+href="/static/style.css?v=20260817d">
 
 </head>
 
@@ -18,7 +18,10 @@ href="/static/style.css?v=20260815a">
 
 <div class="radio">
 
+<div class="app-header">
 <h1>🎵 Internet Radio</h1>
+<button id="settingsBtn" class="settings-btn" onclick="openSettingsModal()" aria-label="Settings" title="Settings">⚙️</button>
+</div>
 
 <div class="mode-selector">
 <button id="modeRadioBtn" class="mode-btn active" onclick="setMode('radio')">📻 Radio</button>
@@ -164,11 +167,77 @@ onchange="setVolume(this.value)">
 </div>
 </div>
 
+<div id="settingsModal" class="modal hidden">
+<div class="modal-card">
+<h4>Settings</h4>
+<div class="settings-list">
+<button class="settings-item" onclick="openBluetoothModal()">
+<span>🔵 Bluetooth</span>
+<span class="settings-item-arrow">›</span>
+</button>
+<button class="settings-item" onclick="openWifiModal()">
+<span>📶 Wi-Fi</span>
+<span class="settings-item-arrow">›</span>
+</button>
+</div>
+<div class="modal-actions single">
+<button onclick="closeSettingsModal()">Close</button>
+</div>
+</div>
+</div>
+
+<div id="bluetoothModal" class="modal hidden">
+<div class="modal-card">
+<h4>Bluetooth</h4>
+<div class="bluetooth-power-row">
+<span>Bluetooth</span>
+<label class="toggle-switch">
+<input type="checkbox" id="bluetoothPowerToggle" onchange="toggleBluetoothPower(this.checked)">
+<span class="toggle-slider"></span>
+</label>
+</div>
+<div id="bluetoothNote" class="modal-note">Turn off Bluetooth to use the headphone jack.</div>
+<div class="modal-actions single">
+<button id="bluetoothScanBtn" onclick="scanBluetoothDevices()">🔍 Scan for Devices</button>
+</div>
+<div id="bluetoothDeviceList" class="admin-list"></div>
+<div class="modal-actions single">
+<button onclick="closeBluetoothModal()">Back</button>
+</div>
+</div>
+</div>
+
+<div id="wifiModal" class="modal hidden">
+<div class="modal-card">
+<h4>Wi-Fi</h4>
+<div id="wifiStatusNote" class="modal-note">Checking status...</div>
+<div class="modal-actions single">
+<button id="wifiScanBtn" onclick="scanWifiNetworks()">🔍 Scan for Networks</button>
+</div>
+<div id="wifiNetworkList" class="admin-list"></div>
+
+<div id="wifiConnectForm" class="wifi-connect-form hidden">
+<div id="wifiConnectSsid" class="modal-note">Connect to: -</div>
+<input id="wifiPasswordInput" type="password" placeholder="Wi-Fi password">
+<div class="modal-actions">
+<button onclick="submitWifiConnect()">Connect</button>
+<button onclick="cancelWifiConnect()">Cancel</button>
+</div>
+</div>
+
+<div class="modal-actions single">
+<button onclick="closeWifiModal()">Back</button>
+</div>
+</div>
+</div>
+
 
 </div>
 
 
-<script src="/static/app.js?v=20260815a"></script>
+
+
+<script src="/static/app.js?v=20260817d"></script>
 
 </body>
 

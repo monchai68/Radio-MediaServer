@@ -539,6 +539,324 @@ def mpc_available():
     return mpc_cmd("status")
 
 
+MPD_OUTPUT_HEADPHONE = "USB Headphone"
+MPD_OUTPUT_BLUETOOTH = "Bluetooth Speaker"
+
+
+def mpc_output_id_by_name(name):
+    try:
+        result = subprocess.check_output(["mpc", "outputs"]).decode()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+    for line in result.splitlines():
+        match = re.match(r"Output (\d+) \((.+)\) is", line.strip())
+        if match and match.group(2).strip() == name:
+            return match.group(1)
+
+    return None
+
+
+def switch_mpd_output(enable_name, disable_name):
+    """Route MPD audio to enable_name and mute disable_name to avoid duplicate/silent playback."""
+    enable_id = mpc_output_id_by_name(enable_name)
+    disable_id = mpc_output_id_by_name(disable_name)
+
+    if enable_id:
+        mpc_cmd(["enable", enable_id])
+    if disable_id:
+        mpc_cmd(["disable", disable_id])
+
+
+BLUETOOTH_SCAN_SECONDS = 8
+
+
+def run_bluetoothctl(commands, timeout=10):
+    """Pipe commands into a single non-interactive bluetoothctl session."""
+    script = "\n".join(commands) + "\n"
+    try:
+        result = subprocess.run(
+            ["bluetoothctl"],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        return result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def bluetoothctl_available():
+    return run_bluetoothctl(["quit"], timeout=5) is not None
+
+
+def get_bluetooth_status():
+    output = run_bluetoothctl(["show", "quit"])
+    if output is None:
+        return {"available": False, "powered": False}
+
+    match = re.search(r"Powered:\s*(yes|no)", output, re.IGNORECASE)
+    powered = bool(match) and match.group(1).lower() == "yes"
+
+    return {"available": True, "powered": powered}
+
+
+def set_bluetooth_power(power_on):
+    output = run_bluetoothctl(["power " + ("on" if power_on else "off"), "quit"], timeout=8)
+    return output is not None
+
+
+def parse_bluetooth_mac_set(list_output):
+    macs = set()
+    for line in (list_output or "").splitlines():
+        match = re.match(r"Device\s+([0-9A-Fa-f:]{17})", line.strip())
+        if match:
+            macs.add(match.group(1))
+    return macs
+
+
+def parse_bluetooth_devices(devices_output, paired_macs, connected_macs):
+    devices = []
+    seen = set()
+    for line in (devices_output or "").splitlines():
+        match = re.match(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line.strip())
+        if not match:
+            continue
+
+        mac, name = match.group(1), match.group(2).strip()
+        if mac in seen:
+            continue
+        seen.add(mac)
+
+        devices.append({
+            "mac": mac,
+            "name": name or mac,
+            "paired": mac in paired_macs,
+            "connected": mac in connected_macs
+        })
+
+    return devices
+
+
+def list_bluetooth_devices():
+    all_output = run_bluetoothctl(["devices", "quit"])
+    if all_output is None:
+        return None
+
+    paired_output = run_bluetoothctl(["devices Paired", "quit"])
+    connected_output = run_bluetoothctl(["devices Connected", "quit"])
+
+    paired_macs = parse_bluetooth_mac_set(paired_output)
+    connected_macs = parse_bluetooth_mac_set(connected_output)
+
+    return parse_bluetooth_devices(all_output, paired_macs, connected_macs)
+
+
+def scan_bluetooth_devices(duration=BLUETOOTH_SCAN_SECONDS):
+    try:
+        proc = subprocess.Popen(
+            ["bluetoothctl"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+    except FileNotFoundError:
+        return None
+
+    try:
+        proc.stdin.write("power on\nagent NoInputNoOutput\ndefault-agent\nscan on\n")
+        proc.stdin.flush()
+        time.sleep(duration)
+        proc.stdin.write("scan off\nquit\n")
+        proc.stdin.flush()
+        proc.communicate(timeout=5)
+    except Exception:
+        proc.kill()
+
+    return list_bluetooth_devices()
+
+
+def bluetooth_connect_device(mac):
+    """Pace pair/trust/connect with delays; firing them back-to-back races
+    BlueZ's automatic post-pairing disconnect and drops the connection."""
+    try:
+        proc = subprocess.Popen(
+            ["bluetoothctl"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+    except FileNotFoundError:
+        return False, "bluetoothctl unavailable"
+
+    output = ""
+    try:
+        proc.stdin.write("agent NoInputNoOutput\ndefault-agent\n")
+        proc.stdin.flush()
+        time.sleep(1)
+
+        proc.stdin.write("pair " + mac + "\n")
+        proc.stdin.flush()
+        time.sleep(3)
+
+        proc.stdin.write("trust " + mac + "\n")
+        proc.stdin.flush()
+        time.sleep(1)
+
+        proc.stdin.write("connect " + mac + "\n")
+        proc.stdin.flush()
+        time.sleep(3)
+
+        proc.stdin.write("quit\n")
+        proc.stdin.flush()
+        output, _ = proc.communicate(timeout=10)
+    except Exception:
+        proc.kill()
+        return False, "bluetoothctl timed out or unavailable"
+
+    lowered = output.lower()
+    if "failed to connect" in lowered and "already connected" not in lowered:
+        return False, "failed to connect to device"
+
+    return True, output
+
+
+
+def bluetooth_disconnect_device(mac):
+    return run_bluetoothctl(["disconnect " + mac, "quit"], timeout=10) is not None
+
+
+WIFI_HOTSPOT_CONNECTION_NAME = "PiRadio-Setup"
+WIFI_IFACE = "wlan0"
+
+
+def run_nmcli(args, timeout=15):
+    """nmcli connection management needs root; matches the sudo pattern used by /api/poweroff."""
+    try:
+        return subprocess.run(
+            ["sudo", "nmcli"] + args,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def unescape_nmcli_field(value):
+    return (value or "").replace("\\:", ":").strip()
+
+
+def get_wifi_status():
+    result = run_nmcli(["-t", "-f", "TYPE,STATE,DEVICE,CONNECTION", "connection", "show", "--active"])
+    if result is None:
+        return {"available": False, "connected": False, "ssid": None, "ip": None, "hotspot_active": False}
+
+    connected = False
+    ssid = None
+    hotspot_active = False
+
+    for line in result.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) < 4:
+            continue
+
+        conn_type, state, _device, connection_name = parts[0], parts[1], parts[2], parts[3]
+        if conn_type != "802-11-wireless" or state != "activated":
+            continue
+
+        if connection_name == WIFI_HOTSPOT_CONNECTION_NAME:
+            hotspot_active = True
+            continue
+
+        connected = True
+        ssid = connection_name
+
+    ip_address = None
+    if connected:
+        ip_result = run_nmcli(["-t", "-f", "IP4.ADDRESS", "device", "show", WIFI_IFACE])
+        if ip_result and ip_result.stdout:
+            first_line = ip_result.stdout.splitlines()[0] if ip_result.stdout.splitlines() else ""
+            ip_address = unescape_nmcli_field(first_line.split(":", 1)[-1]).split("/")[0] or None
+
+    return {
+        "available": True,
+        "connected": connected,
+        "ssid": ssid,
+        "ip": ip_address,
+        "hotspot_active": hotspot_active
+    }
+
+
+def scan_wifi_networks():
+    run_nmcli(["device", "wifi", "rescan"], timeout=10)
+    result = run_nmcli(["-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE", "device", "wifi", "list"], timeout=15)
+    if result is None:
+        return None
+
+    saved_result = run_nmcli(["-t", "-f", "NAME,TYPE", "connection", "show"])
+    saved_ssids = set()
+    if saved_result:
+        for line in saved_result.stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1] == "802-11-wireless":
+                saved_ssids.add(unescape_nmcli_field(parts[0]))
+
+    networks = []
+    seen = set()
+    for line in result.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) < 4:
+            continue
+
+        ssid = unescape_nmcli_field(parts[0])
+        signal, security, in_use = parts[1].strip(), parts[2].strip(), parts[3].strip()
+
+        if not ssid or ssid in seen or ssid == WIFI_HOTSPOT_CONNECTION_NAME:
+            continue
+        seen.add(ssid)
+
+        networks.append({
+            "ssid": ssid,
+            "signal": int(signal) if signal.isdigit() else 0,
+            "secured": bool(security),
+            "connected": in_use == "*",
+            "saved": ssid in saved_ssids
+        })
+
+    networks.sort(key=lambda n: n["signal"], reverse=True)
+    return networks
+
+
+def stop_wifi_hotspot():
+    run_nmcli(["connection", "down", WIFI_HOTSPOT_CONNECTION_NAME], timeout=10)
+
+
+def connect_wifi_network(ssid, password):
+    stop_wifi_hotspot()
+
+    args = ["device", "wifi", "connect", ssid]
+    if password:
+        args += ["password", password]
+
+    result = run_nmcli(args, timeout=30)
+    if result is None:
+        return False, "nmcli timed out or unavailable"
+
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or "failed to connect").strip()
+
+    return True, (result.stdout or "").strip()
+
+
+def forget_wifi_network(ssid):
+    result = run_nmcli(["connection", "delete", ssid], timeout=10)
+    return result is not None and result.returncode == 0
+
+
 def parse_status_output(raw_status):
     if "[playing]" in raw_status:
         state = "playing"
@@ -847,6 +1165,123 @@ def poweroff():
         "status": status
     }
     
+
+
+@app.route("/api/bluetooth/status")
+def bluetooth_status():
+    return jsonify(get_bluetooth_status())
+
+
+@app.route("/api/bluetooth/power", methods=["PUT"])
+def bluetooth_power():
+    payload = request.get_json(silent=True) or {}
+    power = payload.get("power")
+
+    if not isinstance(power, bool):
+        return {"error": "power must be true or false"}, 400
+
+    if not set_bluetooth_power(power):
+        return {"available": False, "powered": False}, 503
+
+    if not power:
+        switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+
+    return jsonify(get_bluetooth_status())
+
+
+@app.route("/api/bluetooth/devices")
+def bluetooth_devices():
+    devices = list_bluetooth_devices()
+    if devices is None:
+        return {"available": False, "devices": []}, 503
+
+    return {"available": True, "devices": devices}
+
+
+@app.route("/api/bluetooth/scan", methods=["POST"])
+def bluetooth_scan():
+    devices = scan_bluetooth_devices()
+    if devices is None:
+        return {"available": False, "devices": []}, 503
+
+    return {"available": True, "devices": devices}
+
+
+@app.route("/api/bluetooth/connect", methods=["POST"])
+def bluetooth_connect():
+    payload = request.get_json(silent=True) or {}
+    mac = (payload.get("mac") or "").strip()
+
+    if not mac:
+        return {"error": "mac is required"}, 400
+
+    ok, message = bluetooth_connect_device(mac)
+    if not ok:
+        return {"error": message}, 503
+
+    switch_mpd_output(MPD_OUTPUT_BLUETOOTH, MPD_OUTPUT_HEADPHONE)
+
+    return {"status": "connected", "mac": mac}
+
+
+@app.route("/api/bluetooth/disconnect", methods=["POST"])
+def bluetooth_disconnect():
+    payload = request.get_json(silent=True) or {}
+    mac = (payload.get("mac") or "").strip()
+
+    if not mac:
+        return {"error": "mac is required"}, 400
+
+    if not bluetooth_disconnect_device(mac):
+        return {"error": "bluetoothctl unavailable"}, 503
+
+    switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+
+    return {"status": "disconnected", "mac": mac}
+
+
+@app.route("/api/wifi/status")
+def wifi_status():
+    return jsonify(get_wifi_status())
+
+
+@app.route("/api/wifi/scan")
+def wifi_scan():
+    networks = scan_wifi_networks()
+    if networks is None:
+        return {"available": False, "networks": []}, 503
+
+    return {"available": True, "networks": networks}
+
+
+@app.route("/api/wifi/connect", methods=["POST"])
+def wifi_connect():
+    payload = request.get_json(silent=True) or {}
+    ssid = (payload.get("ssid") or "").strip()
+    password = payload.get("password") or ""
+
+    if not ssid:
+        return {"error": "ssid is required"}, 400
+
+    ok, message = connect_wifi_network(ssid, password)
+    if not ok:
+        return {"error": message}, 503
+
+    return {"status": "connected", "ssid": ssid}
+
+
+@app.route("/api/wifi/forget", methods=["POST"])
+def wifi_forget():
+    payload = request.get_json(silent=True) or {}
+    ssid = (payload.get("ssid") or "").strip()
+
+    if not ssid:
+        return {"error": "ssid is required"}, 400
+
+    if not forget_wifi_network(ssid):
+        return {"error": "nmcli unavailable"}, 503
+
+    return {"status": "forgotten", "ssid": ssid}
 
 
 
