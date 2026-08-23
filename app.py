@@ -542,6 +542,30 @@ def mpc_available():
 MPD_OUTPUT_HEADPHONE = "USB Headphone"
 MPD_OUTPUT_BLUETOOTH = "Bluetooth Speaker"
 
+AUDIO_STATE_PATH = os.path.join(BASE_DIR, "audio_state.json")
+
+
+def load_audio_state():
+    try:
+        with open(AUDIO_STATE_PATH, encoding="utf-8") as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"output": "jack", "mac": None}
+
+    if state.get("output") not in ("bluetooth", "jack"):
+        return {"output": "jack", "mac": None}
+
+    return {"output": state.get("output"), "mac": state.get("mac")}
+
+
+def save_audio_state(output, mac=None):
+    state = {"output": output, "mac": mac if output == "bluetooth" else None}
+    try:
+        with open(AUDIO_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
 
 def mpc_output_id_by_name(name):
     try:
@@ -1185,6 +1209,7 @@ def bluetooth_power():
 
     if not power:
         switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+        save_audio_state("jack")
 
     return jsonify(get_bluetooth_status())
 
@@ -1220,6 +1245,7 @@ def bluetooth_connect():
         return {"error": message}, 503
 
     switch_mpd_output(MPD_OUTPUT_BLUETOOTH, MPD_OUTPUT_HEADPHONE)
+    save_audio_state("bluetooth", mac)
 
     return {"status": "connected", "mac": mac}
 
@@ -1236,6 +1262,7 @@ def bluetooth_disconnect():
         return {"error": "bluetoothctl unavailable"}, 503
 
     switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+    save_audio_state("jack")
 
     return {"status": "disconnected", "mac": mac}
 
@@ -1551,7 +1578,33 @@ def volume(vol):
         "volume":vol
     }
 
+def restore_last_audio_output():
+    """On boot, reconnect the last-used Bluetooth device or fall back to the jack output."""
+    # MPD/bluetoothd may still be starting; give them a moment before touching outputs.
+    time.sleep(5)
+
+    state = load_audio_state()
+
+    if state["output"] == "bluetooth" and state["mac"]:
+        set_bluetooth_power(True)
+
+        connected = False
+        for attempt in range(3):
+            ok, _ = bluetooth_connect_device(state["mac"])
+            if ok:
+                connected = True
+                break
+            time.sleep(3)
+
+        if connected:
+            switch_mpd_output(MPD_OUTPUT_BLUETOOTH, MPD_OUTPUT_HEADPHONE)
+            return
+
+    switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+
+
 if __name__ == "__main__":
+    threading.Thread(target=restore_last_audio_output, daemon=True).start()
     app.run(
         host="0.0.0.0",
         port=5000

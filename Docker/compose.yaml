@@ -1,0 +1,15 @@
+services:
+  piradio:
+    build:
+      context: ..
+      dockerfile: Docker/Dockerfile
+    container_name: piradio
+    network_mode: host
+    environment:
+      MPD_HOST: ${MPD_HOST:-127.0.0.1}
+      MPD_PORT: ${MPD_PORT:-6600}
+      PIRADIO_PORT: ${PIRADIO_PORT:-5000}
+    volumes:
+      - ./data:/data
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+    restart: unless-stopped
