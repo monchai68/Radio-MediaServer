@@ -329,7 +329,19 @@ docker compose up -d --build
 
 อย่าลบ `Docker/data/` หากต้องการคงสถานี, รายการโปรด, playback mode และ audio state เดิม
 
+**สำคัญ**: Pi 3B ที่ deploy ด้วย Docker Compose ชุดนี้ **ไม่มี** systemd unit ชื่อ `radio.service` (unit นั้นมีเฉพาะ deployment แบบเก่าบน Pi Zero 2W ที่รัน Flask ตรง ๆ ด้วย `python`/`gunicorn`) ห้ามใช้ `sudo systemctl restart radio.service` เพื่อ deploy โค้ดใหม่บนเครื่องนี้ ให้ใช้ `docker compose up -d --build` เท่านั้น ดูหัวข้อ "Port 5000 ถูกใช้งานอยู่" ด้านล่างหากเจอ error `Unit radio.service not found`
+
 ## ปัญหาที่พบบ่อย
+
+### `Failed to restart radio.service: Unit radio.service not found`
+
+เป็นเรื่องปกติบน Pi 3B ชุดนี้ เพราะ deploy ด้วย Docker Compose ไม่ได้ตั้ง systemd unit `radio.service` ไว้ (unit นี้มีเฉพาะ Pi เครื่องเก่าที่ยังไม่ dockerize) ให้ redeploy ด้วยคำสั่งนี้แทน:
+
+```bash
+cd ~/radio-server/Docker
+docker compose up -d --build
+docker compose logs --tail=100 piradio
+```
 
 ### Port 5000 ถูกใช้งานอยู่
 
@@ -415,6 +427,22 @@ sudo rfkill unblock bluetooth
 ### Wi-Fi ในเว็บขึ้น unavailable
 
 เป็นพฤติกรรมที่คาดไว้ เพราะ Docker image ชุดนี้ยังไม่ติดตั้ง `nmcli` หรือ host authorization ที่จำเป็นสำหรับ feature นี้
+
+### รีสตาร์ต/ปิดเครื่องแล้วไม่กลับมาเล่นสถานีวิทยุ หรือ output เดิม (เล่นเพลงจาก media server/DLNA ค้างมาแทน)
+
+แอปจะจำ output (jack/bluetooth) และสถานีวิทยุล่าสุดไว้ใน `Docker/data/audio_state.json` แล้ว resume อัตโนมัติตอนบูตผ่าน `restore_last_audio_output()` ใน `app.py` ปัญหานี้เคยเกิดจาก MPD เองมีกลไก auto-resume คิวเพลงเดิมของตัวเอง (จาก `state_file` ใน `mpd.conf`) ซึ่งอาจ resume เพลงจาก DLNA/media server ค้างไว้ก่อนที่แอปจะเข้ามา override ทัน (เช่น MPD ยังไม่พร้อมตอนแอปพยายาม resume) โค้ดปัจจุบันแก้แล้วด้วยการรอ MPD พร้อมจริงก่อน (`wait_for_mpd()`) และ retry คำสั่ง resume สถานีสูงสุด 3 ครั้ง หากยังเจอปัญหานี้อยู่ ให้ตรวจตามลำดับ:
+
+```bash
+cat ~/radio-server/Docker/data/audio_state.json
+cd ~/radio-server/Docker
+docker compose logs --tail=200 piradio | grep -i -E "mpd|mpc|restore"
+mpc status
+mpc outputs
+```
+
+1. ตรวจว่า `audio_state.json` มี `last_station_id` ตรงกับสถานีที่เล่นค้างไว้ก่อน poweroff จริงหรือไม่ (ถ้าไม่มี/เป็น `null` แสดงว่า `/api/play/<id>` ยังไม่เคยถูกเรียกสำเร็จ หรือถูก `/api/stop` เคลียร์ไปก่อนปิดเครื่อง)
+2. ถ้า `last_station_id` ถูกต้องแต่ยังไม่ resume ให้ตรวจว่า container/`app.py` เป็นเวอร์ชันล่าสุดที่มี `wait_for_mpd()` และ `mpc_cmd()` เช็ค returncode จริง (ไม่ใช่เวอร์ชันเก่าที่ `mpc_cmd()` return `True` เสมอ) ให้ redeploy ตามหัวข้อ "อัปเดต source ภายหลัง"
+3. ถ้ายังไม่หาย ให้ปิด auto-resume ของ MPD เองใน `/etc/mpd.conf` (ลบ/คอมเมนต์บรรทัด `state_file`) แล้ว `sudo systemctl restart mpd` เพื่อไม่ให้ MPD แข่ง resume คิวเก่าของตัวเอง
 
 ## Rollback กลับไปใช้ service เดิม
 

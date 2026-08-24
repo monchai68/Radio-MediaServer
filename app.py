@@ -529,14 +529,25 @@ def mpc_cmd(command):
             args = command.split()
         else:
             args = list(command)
-        subprocess.run(["mpc"] + args, check=False)
-        return True
+        result = subprocess.run(["mpc"] + args, check=False)
+        return result.returncode == 0
     except FileNotFoundError:
         return False
 
 
 def mpc_available():
     return mpc_cmd("status")
+
+
+def wait_for_mpd(max_seconds=30, interval=2):
+    """Poll until MPD responds, so we don't silently no-op the boot-time resume before it's ready."""
+    waited = 0
+    while waited < max_seconds:
+        if mpc_available():
+            return True
+        time.sleep(interval)
+        waited += interval
+    return False
 
 
 MPD_OUTPUT_HEADPHONE = "USB Headphone"
@@ -550,16 +561,30 @@ def load_audio_state():
         with open(AUDIO_STATE_PATH, encoding="utf-8") as f:
             state = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"output": "jack", "mac": None}
+        return {"output": "jack", "mac": None, "last_station_id": None}
 
     if state.get("output") not in ("bluetooth", "jack"):
-        return {"output": "jack", "mac": None}
+        state["output"] = "jack"
+        state["mac"] = None
 
-    return {"output": state.get("output"), "mac": state.get("mac")}
+    return {
+        "output": state.get("output"),
+        "mac": state.get("mac"),
+        "last_station_id": state.get("last_station_id")
+    }
 
 
-def save_audio_state(output, mac=None):
-    state = {"output": output, "mac": mac if output == "bluetooth" else None}
+def save_audio_state(output=None, mac=None, last_station_id="__unset__"):
+    """Merge-update audio_state.json; pass only the fields that changed."""
+    state = load_audio_state()
+
+    if output is not None:
+        state["output"] = output
+        state["mac"] = mac if output == "bluetooth" else None
+
+    if last_station_id != "__unset__":
+        state["last_station_id"] = last_station_id
+
     try:
         with open(AUDIO_STATE_PATH, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
@@ -1336,6 +1361,8 @@ def play(id):
             set_playback_mode("radio")
             save_data_store()
 
+        save_audio_state(last_station_id=station["id"])
+
         return {
             "status":"playing",
             "station":station["name"],
@@ -1505,6 +1532,7 @@ def next_station():
 def stop():
 
     mpc_cmd("stop")
+    # keep last_station_id so boot-time resume still works after stop + power off
 
     return {
         "status":"stopped"
@@ -1579,9 +1607,10 @@ def volume(vol):
     }
 
 def restore_last_audio_output():
-    """On boot, reconnect the last-used Bluetooth device or fall back to the jack output."""
-    # MPD/bluetoothd may still be starting; give them a moment before touching outputs.
-    time.sleep(5)
+    """On boot, reconnect the last-used Bluetooth device / jack output, then resume the last radio station."""
+    # MPD/bluetoothd may still be starting; wait until MPD actually responds instead of guessing a fixed delay.
+    if not wait_for_mpd():
+        return
 
     state = load_audio_state()
 
@@ -1598,9 +1627,27 @@ def restore_last_audio_output():
 
         if connected:
             switch_mpd_output(MPD_OUTPUT_BLUETOOTH, MPD_OUTPUT_HEADPHONE)
-            return
+        else:
+            switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+    else:
+        switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
 
-    switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+    last_station_id = state.get("last_station_id")
+    if last_station_id is None:
+        return
+
+    station = next((s for s in get_stations() if s["id"] == last_station_id), None)
+    if not station:
+        return
+
+    # MPD may auto-resume its own last queue at startup; retry so our choice wins the race.
+    for attempt in range(3):
+        ok_clear = mpc_cmd("clear")
+        ok_add = mpc_cmd(["add", station["url"]])
+        ok_play = mpc_cmd("play")
+        if ok_clear and ok_add and ok_play:
+            return
+        time.sleep(2)
 
 
 if __name__ == "__main__":
