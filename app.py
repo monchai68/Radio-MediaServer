@@ -111,11 +111,40 @@ def load_data_store():
     categories = raw.get("categories", []) if isinstance(raw, dict) else []
     stations = raw.get("stations", []) if isinstance(raw, dict) else []
     playback_mode = raw.get("playback_mode", "radio") if isinstance(raw, dict) else "radio"
+    last_dlna_directory = raw.get("last_dlna_directory") if isinstance(raw, dict) else None
     needs_save = False
 
     if playback_mode not in VALID_PLAYBACK_MODES:
         playback_mode = "radio"
         needs_save = True
+
+    if not isinstance(last_dlna_directory, dict) or not str(last_dlna_directory.get("server_id") or "").strip():
+        last_dlna_directory = None
+    else:
+        breadcrumb = last_dlna_directory.get("breadcrumb")
+        if not isinstance(breadcrumb, list):
+            breadcrumb = []
+        track = last_dlna_directory.get("track")
+        if not isinstance(track, dict):
+            track = {}
+        last_dlna_directory = {
+            "server_id": str(last_dlna_directory["server_id"]).strip(),
+            "container_id": str(last_dlna_directory.get("container_id") or "0").strip() or "0",
+            "breadcrumb": [
+                {
+                    "id": str(node.get("id") or "").strip(),
+                    "title": str(node.get("title") or "Folder").strip() or "Folder"
+                }
+                for node in breadcrumb
+                if isinstance(node, dict) and str(node.get("id") or "").strip()
+            ],
+            "track": {
+                "id": str(track.get("id") or "").strip(),
+                "url": str(track.get("url") or "").strip(),
+                "title": str(track.get("title") or "").strip(),
+                "artist": str(track.get("artist") or "").strip()
+            }
+        }
 
     if not categories:
         categories = [{"id": 1, "name": "รายการโปรด"}, {"id": 2, "name": "ทั่วไป"}]
@@ -166,7 +195,8 @@ def load_data_store():
     data_store = {
         "categories": categories,
         "stations": normalized_stations,
-        "playback_mode": playback_mode
+        "playback_mode": playback_mode,
+        "last_dlna_directory": last_dlna_directory
     }
 
     if needs_save:
@@ -201,6 +231,19 @@ def get_playback_mode():
 
 def set_playback_mode(mode):
     data_store["playback_mode"] = mode
+
+
+def get_last_dlna_directory():
+    return data_store.get("last_dlna_directory")
+
+
+def set_last_dlna_directory(server_id, container_id, breadcrumb, track):
+    data_store["last_dlna_directory"] = {
+        "server_id": server_id,
+        "container_id": container_id,
+        "breadcrumb": breadcrumb,
+        "track": track
+    }
 
 
 def get_favorites_category_id():
@@ -1387,6 +1430,13 @@ def dlna_servers():
     }
 
 
+@app.route("/api/dlna/directory")
+def dlna_directory():
+    return {
+        "directory": get_last_dlna_directory()
+    }
+
+
 @app.route("/api/dlna/browse")
 def dlna_browse():
     server_id = (request.args.get("server_id") or "").strip()
@@ -1426,6 +1476,7 @@ def dlna_play():
     server_id = (payload.get("server_id") or "").strip()
     item_id = (payload.get("item_id") or "").strip()
     container_id = (payload.get("container_id") or "").strip()
+    breadcrumb = payload.get("breadcrumb") or []
     title = (payload.get("title") or "").strip()
     artist = (payload.get("artist") or "").strip()
     url_hint = (payload.get("url") or "").strip()
@@ -1459,12 +1510,17 @@ def dlna_play():
                 "error": "mpc not available"
             }, 503
 
-        set_playback_mode("media_server")
-        save_data_store()
-
         first_track = queue[0]
         resolved_title = title or first_track.get("title") or "DLNA Track"
         resolved_artist = artist or first_track.get("artist") or ""
+        set_playback_mode("media_server")
+        set_last_dlna_directory(server_id, container_id, breadcrumb, {
+            "id": item_id,
+            "url": urls[0],
+            "title": resolved_title,
+            "artist": resolved_artist
+        })
+        save_data_store()
 
         return {
             "status": "playing",
@@ -1491,11 +1547,16 @@ def dlna_play():
             "error": "mpc not available"
         }, 503
 
-    set_playback_mode("media_server")
-    save_data_store()
-
     resolved_title = title or (resolved_meta or {}).get("title") or "DLNA Track"
     resolved_artist = artist or (resolved_meta or {}).get("artist") or ""
+    set_playback_mode("media_server")
+    set_last_dlna_directory(server_id, container_id or "0", breadcrumb, {
+        "id": item_id,
+        "url": resolved_url,
+        "title": resolved_title,
+        "artist": resolved_artist
+    })
+    save_data_store()
 
     return {
         "status": "playing",

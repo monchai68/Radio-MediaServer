@@ -13,6 +13,10 @@ let dlnaServerId = "";
 let dlnaItems = [];
 let dlnaBreadcrumb = [];
 let dlnaCurrentTrack = null;
+let dlnaRestoreAttempted = false;
+let dlnaRestoreInFlight = false;
+let dlnaRestoreRetries = 0;
+const DLNA_RESTORE_MAX_RETRIES = 6;
 
 function escapeHtml(value) {
     return String(value || "")
@@ -532,6 +536,7 @@ function loadDlnaServers(forceRefresh) {
                 renderDlnaBreadcrumb();
                 renderDlnaItems();
                 setStatusText(data.error || "DLNA unavailable");
+                scheduleDlnaRestoreRetry();
                 return;
             }
 
@@ -546,10 +551,62 @@ function loadDlnaServers(forceRefresh) {
 
             renderDlnaBreadcrumb();
             renderDlnaItems();
+            restoreDlnaDirectory();
         })
         .catch(() => {
             setStatusText("Cannot load media servers");
         });
+}
+
+function restoreDlnaDirectory() {
+    if (dlnaRestoreAttempted || dlnaRestoreInFlight || playbackMode !== "media_server") {
+        return;
+    }
+
+    dlnaRestoreInFlight = true;
+    fetch("/api/dlna/directory")
+        .then((r) => r.json())
+        .then((data) => {
+            const directory = data.directory;
+            if (!directory) {
+                dlnaRestoreAttempted = true;
+                return;
+            }
+            if (!dlnaServers.some((server) => server.id === directory.server_id)) {
+                scheduleDlnaRestoreRetry();
+                return;
+            }
+
+            dlnaServerId = directory.server_id;
+            dlnaBreadcrumb = Array.isArray(directory.breadcrumb) && directory.breadcrumb.length > 0
+                ? directory.breadcrumb
+                : [{ id: directory.container_id || "0", title: "Root" }];
+            dlnaCurrentTrack = directory.track && (directory.track.id || directory.track.url)
+                ? directory.track
+                : null;
+            dlnaRestoreAttempted = true;
+            renderDlnaServers();
+            renderDlnaBreadcrumb();
+            browseDlnaContainer(directory.container_id || "0", true);
+            if (dlnaCurrentTrack) {
+                setNowPlayingInfo(dlnaCurrentTrack.title || "", dlnaCurrentTrack.artist || "");
+            }
+        })
+        .catch(() => {
+            scheduleDlnaRestoreRetry();
+        })
+        .finally(() => {
+            dlnaRestoreInFlight = false;
+        });
+}
+
+function scheduleDlnaRestoreRetry() {
+    if (dlnaRestoreAttempted || dlnaRestoreRetries >= DLNA_RESTORE_MAX_RETRIES || playbackMode !== "media_server") {
+        return;
+    }
+
+    dlnaRestoreRetries += 1;
+    setTimeout(() => loadDlnaServers(true), 5000);
 }
 
 function selectDlnaServerByIndex(index) {
@@ -662,6 +719,7 @@ function playDlnaTrack(item) {
         body: JSON.stringify({
             server_id: dlnaServerId,
             container_id: containerId,
+            breadcrumb: dlnaBreadcrumb,
             item_id: item.id,
             title: item.title || "",
             artist: item.artist || "",
@@ -742,8 +800,10 @@ function syncStatus() {
                 }
             }
 
-            if (data.now_playing) {
+            if (data.now_playing && (data.now_playing.title || data.now_playing.artist)) {
                 setNowPlayingInfo(data.now_playing.title || "", data.now_playing.artist || "");
+            } else if (playbackMode === "media_server" && dlnaCurrentTrack) {
+                setNowPlayingInfo(dlnaCurrentTrack.title || "", dlnaCurrentTrack.artist || "");
             } else {
                 setNowPlayingInfo("", "");
             }
@@ -790,9 +850,71 @@ function getCurrentIndex() {
     return getVisibleStations().findIndex((s) => s.id === currentStation);
 }
 
+function getDlnaTracks() {
+    return (dlnaItems || []).filter((item) => item.type !== "folder");
+}
+
+function prevDlnaTrack() {
+    const tracks = getDlnaTracks();
+    if (tracks.length > 0) {
+        let idx = -1;
+        if (dlnaCurrentTrack) {
+            idx = tracks.findIndex(
+                (t) => t.id === dlnaCurrentTrack.id || (t.url && dlnaCurrentTrack.url && t.url === dlnaCurrentTrack.url)
+            );
+        }
+        const prevIdx = idx <= 0 ? tracks.length - 1 : idx - 1;
+        playDlnaTrack(tracks[prevIdx]);
+        return;
+    }
+
+    if (playerState === "playing" || playerState === "paused") {
+        fetch("/api/prev")
+            .then((r) => r.json())
+            .then(() => {
+                syncStatus();
+            })
+            .catch(() => {
+                setStatusText("Cannot skip to previous track");
+            });
+        return;
+    }
+
+    setStatusText("No media tracks available");
+}
+
+function nextDlnaTrack() {
+    const tracks = getDlnaTracks();
+    if (tracks.length > 0) {
+        let idx = -1;
+        if (dlnaCurrentTrack) {
+            idx = tracks.findIndex(
+                (t) => t.id === dlnaCurrentTrack.id || (t.url && dlnaCurrentTrack.url && t.url === dlnaCurrentTrack.url)
+            );
+        }
+        const nextIdx = idx < 0 || idx >= tracks.length - 1 ? 0 : idx + 1;
+        playDlnaTrack(tracks[nextIdx]);
+        return;
+    }
+
+    if (playerState === "playing" || playerState === "paused") {
+        fetch("/api/next")
+            .then((r) => r.json())
+            .then(() => {
+                syncStatus();
+            })
+            .catch(() => {
+                setStatusText("Cannot skip to next track");
+            });
+        return;
+    }
+
+    setStatusText("No media tracks available");
+}
+
 function prevStation() {
-    if (playbackMode !== "radio") {
-        setStatusText("Prev is unavailable in media mode");
+    if (playbackMode === "media_server") {
+        prevDlnaTrack();
         return;
     }
 
@@ -807,8 +929,8 @@ function prevStation() {
 }
 
 function nextStation() {
-    if (playbackMode !== "radio") {
-        setStatusText("Next is unavailable in media mode");
+    if (playbackMode === "media_server") {
+        nextDlnaTrack();
         return;
     }
 

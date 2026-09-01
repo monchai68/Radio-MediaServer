@@ -122,8 +122,7 @@ mpc outputs
 
 **วิธี A — scp จาก PowerShell (Windows):**
 
-```powershell
-scp -r D:\code\Flask\PiZero2W\* <pi-user>@piradio.local:/home/<pi-user>/radio-server/
+```powershel
 ```
 
 **วิธี B — git clone บน Pi** (ถ้า push repo ขึ้น git server/GitHub แล้ว):

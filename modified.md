@@ -317,3 +317,78 @@ python app.py
 - Hotspot fallback ใช้รหัสผ่าน default `piradio1234` — ควรเปลี่ยนก่อนใช้งานจริงเพื่อความปลอดภัย (แก้ในไฟล์ `scripts/wifi-fallback.sh`)
 - Pi Zero 2 W รองรับ Wi-Fi 2.4GHz เท่านั้น ไม่ต้องพยายามหาเครือข่าย 5GHz
 
+---
+
+# Modified: Resume DLNA Directory and Track Metadata
+
+วันที่ปรับปรุง: 2026-09-01
+
+## สรุป
+
+เมื่อเครื่องเริ่มทำงานและหน้าเว็บอยู่ในโหมด `media_server` ระบบจะเปิดรายการเพลงของ directory ที่เล่นล่าสุดให้โดยอัตโนมัติ โดยไม่ต้องค้นหาโฟลเดอร์ใหม่ ผู้ใช้ต้องกดเล่นเพลงจาก Media Server อย่างน้อยหนึ่งครั้งก่อน เพื่อให้ระบบมีข้อมูล directory และเพลงล่าสุดสำหรับ restore
+
+เพิ่ม fallback สำหรับชื่อเพลงและศิลปินด้วย เพื่อให้ Docker แสดง metadata ได้แม้ MPD ยังไม่คืน tag จาก URL ของ DLNA ตอนเริ่มระบบ
+
+## การเปลี่ยนแปลงในโค้ด
+
+### Backend: `app.py`
+
+- เพิ่ม API `GET /api/dlna/directory` สำหรับคืนค่า directory ล่าสุด
+- เมื่อ `POST /api/dlna/play` เล่นสำเร็จ จะบันทึก `last_dlna_directory` ลง `stations.json` โดยมีข้อมูล:
+  - `server_id`
+  - `container_id`
+  - `breadcrumb`
+  - `track.id`
+  - `track.url`
+  - `track.title`
+  - `track.artist`
+- รองรับ `stations.json` รุ่นเก่าที่ยังไม่มี `last_dlna_directory` หรือ `track` โดยไม่ทำให้แอปล้ม
+- บันทึกข้อมูลหลังคำสั่ง MPD/MPC สำเร็จเท่านั้น จึงไม่ทับค่า directory เดิมเมื่อเล่นเพลงไม่สำเร็จ
+
+### Frontend: `static/app.js`
+
+- เมื่อเปิดหน้าเว็บในโหมด `media_server` จะค้นหา DLNA server และเรียก `GET /api/dlna/directory`
+- หากพบ server เดิม จะ restore breadcrumb และ browse directory ล่าสุดเพื่อแสดง folder/รายการเพลงทันที
+- กรณี DLNA server ตอบช้าระหว่าง boot จะ retry discovery/restore ทุก 5 วินาที สูงสุด 6 ครั้ง
+- ใช้ `track.title` และ `track.artist` ที่บันทึกไว้เป็น fallback เมื่อ `/api/status` ไม่ได้รับ metadata จาก MPD โดยเฉพาะกรณี MPD ใน Docker ยังไม่อ่าน tag ของ DLNA URL
+
+## การ Deploy
+
+ต้องอัปเดต 2 ไฟล์พร้อมกัน:
+
+- `app.py`
+- `static/app.js`
+
+ไม่ต้อง copy `stations.json` จากเครื่องพัฒนา เพราะไฟล์บน Pi มีข้อมูลสถานีของเครื่องนั้นอยู่แล้ว หลัง deploy ให้กดเล่นเพลงหนึ่งเพลงใน Media Server เพื่อให้ server สร้างหรืออัปเดต `last_dlna_directory` ของเครื่องนั้น
+
+### Pi Zero 2 W (systemd)
+
+Copy ไฟล์ไปที่ `/home/monchai68/radio-server/` แล้ว restart:
+
+```bash
+sudo systemctl restart radio.service
+```
+
+### Pi 3B (Docker)
+
+Copy source เข้า `~/radio-server/` ตามโครงสร้างเดิม แล้ว rebuild container:
+
+```bash
+cd ~/radio-server/Docker
+docker compose up -d --build
+```
+
+ข้อมูล runtime ของ Docker อยู่ใน `Docker/data/stations.json` ผ่าน volume `/data`; ห้ามแทนที่ไฟล์นี้ด้วย `stations.json` จากเครื่องพัฒนา
+
+## การตรวจสอบ
+
+- `python -m py_compile app.py` ผ่าน
+- ทดสอบ Flask test client: `GET /api/dlna/directory` ตอบ HTTP 200 และคืนค่า title/artist ที่บันทึกใน state ได้
+- VS Code diagnostics ของ `app.py` และ `static/app.js` ไม่มี error
+
+## ข้อควรทราบ
+
+- ถ้าเปิดเว็บก่อน DLNA server พร้อม ระบบจะ retry รวมประมาณ 30 วินาที; หลังจากนั้นสามารถกด refresh server จากหน้า Media Server ได้ตามปกติ
+- ถ้าเปลี่ยนไปเล่นเพลงจาก server หรือ directory อื่น ระบบจะบันทึกตำแหน่งใหม่เมื่อเริ่มเล่นเพลงนั้นสำเร็จ
+- Metadata fallback จะแสดงข้อมูลของเพลงที่เลือกเล่นล่าสุด ไม่ได้ใช้ทดแทน metadata แบบ real-time ของทุกเพลงใน MPD queue
+
