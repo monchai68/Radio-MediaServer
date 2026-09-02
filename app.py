@@ -3,6 +3,7 @@ import subprocess
 import json
 import os
 import re
+import socket
 import time
 import threading
 import xml.etree.ElementTree as ET
@@ -1245,8 +1246,24 @@ def resume():
     ok = mpc_cmd("play")
     return {"status": "playing" if ok else "unavailable"}
 
+POWEROFF_SOCKET_PATH = os.environ.get("PIRADIO_POWEROFF_SOCKET")
+
+
 @app.route("/api/poweroff")
 def poweroff():
+    # Docker deployment: no sudo/capabilities in the container, so ask the
+    # host-side helper (Docker/scripts/piradio-poweroff-helper.py) to shut down instead.
+    if POWEROFF_SOCKET_PATH:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(3)
+                s.connect(POWEROFF_SOCKET_PATH)
+                s.sendall(b"poweroff")
+                s.recv(64)
+            return {"status": "shutting down"}
+        except OSError:
+            return {"status": "unavailable"}
+
     try:
         subprocess.Popen(["sudo", "/sbin/poweroff"])
         status = "shutting down"
@@ -1692,6 +1709,24 @@ def restore_last_audio_output():
             switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
     else:
         switch_mpd_output(MPD_OUTPUT_HEADPHONE, MPD_OUTPUT_BLUETOOTH)
+
+    mode = get_playback_mode()
+
+    if mode == "media_server":
+        directory = get_last_dlna_directory()
+        track_url = (directory or {}).get("track", {}).get("url")
+        if not track_url:
+            return
+
+        # MPD may auto-resume its own last queue at startup; retry so our choice wins the race.
+        for attempt in range(3):
+            ok_clear = mpc_cmd("clear")
+            ok_add = mpc_cmd(["add", track_url])
+            ok_play = mpc_cmd("play")
+            if ok_clear and ok_add and ok_play:
+                return
+            time.sleep(2)
+        return
 
     last_station_id = state.get("last_station_id")
     if last_station_id is None:

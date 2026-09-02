@@ -76,3 +76,23 @@ docker compose exec piradio mpc status
 http://<IP_ของ_Raspberry_Pi>:5000
 ```
 หากเสียงเพลงสตรีมออกลำโพงได้ตามปกติและเปลี่ยนสถานีได้ราบรื่น แสดงว่าระบบทั้งหมดกลับมาใช้งานได้ครบถ้วนแล้ว!
+
+---
+
+## 5. ปัญหา: ปุ่ม Power Off บนหน้าเว็บไม่ทำงานเมื่อรันผ่าน Docker (Raspberry Pi 3B)
+
+### อาการที่พบ (Symptom)
+* กดปุ่ม Power Off (ปุ่มปิดเครื่องสีแดง) บนหน้าเว็บแล้ว Raspberry Pi 3B ไม่ยอมปิดเครื่อง (ไม่มีผลใดๆ เกิดขึ้น) ต่างจากบน Raspberry Pi Zero 2 W ที่รันแบบ Bare-metal/systemd ซึ่งกดปิดเครื่องได้ตามปกติ
+
+### สาเหตุของปัญหา (Root Causes)
+1. **ไม่มีคำสั่ง `sudo` ภายใน Container:** โค้ดใน backend เรียกคำสั่ง `subprocess.Popen(["sudo", "/sbin/poweroff"])` แต่ใน Docker Image ติดตั้งไว้เพียง `bluez` และ `mpc` ไม่มีแพ็กเกจ `sudo` และไม่มีการตั้งค่า sudoers ใน Container ทำให้คำสั่งล้มเหลวทันที
+2. **ข้อจำกัดเรื่องสิทธิ์และการแยกส่วนของ Docker (Container Isolation):** โดยค่าเริ่มต้น Container จะถูกจำกัด Linux capabilities (ไม่มี `CAP_SYS_BOOT`) และไม่มี systemd ของ Host ทำให้ process ภายใน Container ไม่มีสิทธิ์ส่งสัญญาณปิดเครื่องจริงของ Host ได้
+
+### วิธีการแก้ไข / ข้อแนะนำ (Workaround & Solutions)
+* **การปิดเครื่องในปัจจุบัน:** ให้สั่งปิดเครื่องผ่าน SSH บนตัวเครื่อง Host โดยตรง:
+  ```bash
+  sudo poweroff
+
+  แนวทางแก้ที่แผนแนะนำไว้ (ยังไม่ได้ทำ)
+
+ต้องทำ helper ฝั่ง host (นอก container) เช่น สคริปต์/systemd service เล็กๆ บน Pi 3B ที่คอยฟังคำสั่งปิดเครื่อง (ผ่าน socket file, D-Bus หรือไฟล์ที่คอย watch) แล้วให้ container เรียกไปหา helper ตัวนี้แทนที่จะสั่ง poweroff ตรงๆ — วิธีนี้ปลอดภัยกว่าการเปิด privileged: true ให้ container ซึ่งแผนบอกไว้ชัดว่าไม่ควรทำเพราะให้สิทธิ์เกินจำเป็นมากครับ

@@ -9,7 +9,9 @@ services:
       MPD_HOST: ${MPD_HOST:-127.0.0.1}
       MPD_PORT: ${MPD_PORT:-6600}
       PIRADIO_PORT: ${PIRADIO_PORT:-5000}
+      PIRADIO_POWEROFF_SOCKET: /run/piradio/poweroff.sock
     volumes:
       - ./data:/data
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      - /run/piradio:/run/piradio
     restart: unless-stopped

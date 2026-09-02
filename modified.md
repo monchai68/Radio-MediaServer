@@ -392,3 +392,80 @@ docker compose up -d --build
 - ถ้าเปลี่ยนไปเล่นเพลงจาก server หรือ directory อื่น ระบบจะบันทึกตำแหน่งใหม่เมื่อเริ่มเล่นเพลงนั้นสำเร็จ
 - Metadata fallback จะแสดงข้อมูลของเพลงที่เลือกเล่นล่าสุด ไม่ได้ใช้ทดแทน metadata แบบ real-time ของทุกเพลงใน MPD queue
 
+---
+
+# Modified (แผนที่ออกแบบไว้ ยังไม่ได้ implement): Power Off บน Docker (Pi 3B) แยกจาก Pi Zero 2 W
+
+วันที่ออกแบบ: 2026-09-02
+
+## สรุป
+
+ปุ่ม Power Off บนหน้าเว็บใช้ไม่ได้เมื่อรันผ่าน Docker (Pi 3B) เพราะ container ไม่มี `sudo` และไม่มีสิทธิ์สั่งปิดเครื่องจริงของ host (ดู [troubleshooting.md](troubleshooting.md) ข้อ 5) ในขณะที่ Pi Zero 2 W (bare-metal, `radio.service`) ใช้งานปุ่มนี้ได้ปกติอยู่แล้ว เนื่องจาก `app.py` เป็นไฟล์เดียวที่ deploy ทั้งสองที่ จึงต้องออกแบบให้แก้เฉพาะฝั่ง Docker โดยไม่กระทบพฤติกรรมเดิมของ Pi Zero 2 W เลย
+
+## หลักการ
+
+- **Privilege separation**: container ไม่ควรมีสิทธิ์ปิดเครื่อง host โดยตรง (ห้ามใช้ `privileged: true` เพราะให้สิทธิ์เกินจำเป็น) ต้องมี helper ที่รันนอก container (บน host, เป็น root) เป็นผู้สั่ง `poweroff` จริง แล้ว container คุยกับ helper ผ่านช่องทางที่จำกัดสิทธิ์แคบที่สุด (Unix domain socket)
+- **Feature detection แทน OS detection**: โค้ดใน `app.py` ต้อง "แยกจาก Pi Zero 2 W" โดยเช็คว่ามี resource ที่ตั้งค่าเฉพาะ Docker หรือไม่ (env var ชี้ path ของ socket) ไม่ใช่เช็ค hostname/OS ตรงๆ — ถ้าไม่พบ resource นี้ (เช่นบน Pi Zero 2 W ที่ไม่เคยตั้ง env var นี้เลย) โค้ดจะ fallback ไปใช้ `sudo /sbin/poweroff` แบบเดิมทุกบรรทัด ไม่มีการเปลี่ยนพฤติกรรมเดิมแม้แต่น้อย
+
+## วิธีการ (ออกแบบไว้)
+
+1. **Host helper** (ติดตั้งบน Pi 3B host เท่านั้น ไม่ bake เข้า Docker image):
+   - สคริปต์ Python เปิด Unix socket ที่ `/run/piradio/poweroff.sock` รอรับข้อความ `"poweroff"` แล้วเรียก `/sbin/poweroff` จริง
+   - คุมด้วย systemd unit แยก (`RuntimeDirectory=piradio`, `User=root`, `Restart=always`) ให้สร้าง `/run/piradio` ใหม่ทุกครั้งที่บูต
+2. **Docker compose**: เพิ่ม env var `PIRADIO_POWEROFF_SOCKET=/run/piradio/poweroff.sock` และ bind mount `/run/piradio:/run/piradio` เข้า container (แก้เฉพาะ `Docker/compose.yaml`)
+3. **`app.py`**: `/api/poweroff` เช็ค `os.environ.get("PIRADIO_POWEROFF_SOCKET")` ก่อน — ถ้ามีค่า ให้เชื่อมต่อ Unix socket แล้วส่งคำสั่งไปหา helper; ถ้าไม่มีค่า (กรณี Pi Zero 2 W) ให้ใช้ `subprocess.Popen(["sudo", "/sbin/poweroff"])` เหมือนเดิมทุกประการ
+
+## ความปลอดภัย
+
+- Socket permission `0600` เจ้าของ root:root — container รันเป็น root (ไม่มี `USER` ใน `Docker/Dockerfile`) จึงเชื่อมต่อได้ ฝั่งอื่นเชื่อมต่อไม่ได้
+- Helper รับได้เฉพาะข้อความคงที่ `"poweroff"` เท่านั้น ไม่ interpolate เป็น shell command ใดๆ ป้องกัน command injection
+- ไม่เปิด TCP หรือ expose สู่ network ใดๆ จำกัดอยู่แค่ local Unix socket ที่ bind-mount ระหว่าง host กับ container เดียวกันเท่านั้น
+
+## ทางเลือกที่พิจารณาแล้วแต่ไม่เลือก
+
+- **D-Bus** (reuse `/run/dbus/system_bus_socket` ที่ mount ไว้แล้วสำหรับ Bluetooth): ไม่ต้องเพิ่ม volume ใหม่ แต่ต้องเขียน D-Bus service + policy file บนhost เพิ่ม ซับซ้อนกว่า
+- **`privileged: true`**: ง่ายสุดแต่ให้สิทธิ์เกินจำเป็นมาก (เข้าถึง host devices ทั้งหมด) — ขัดกับที่ `PiZero2W-Dockerize-Plan.md` ระบุไว้ชัดว่าไม่ควรทำ
+- **ไฟล์ trigger + systemd path unit (watch ไฟล์)**: ไม่ต้องเขียน daemon เอง แต่มี polling latency และจัดการ race condition/cleanup ไฟล์ยุ่งกว่า
+
+## สถานะปัจจุบัน
+
+- Implement แล้วในโค้ด: `Docker/scripts/piradio-poweroff-helper.py`, `Docker/scripts/piradio-poweroff-helper.service` (ไฟล์ใหม่), `Docker/compose.yaml` และ `app.py` (`/api/poweroff`) แก้ไขเรียบร้อยแล้ว
+- **ยังไม่ได้ติดตั้งจริงบนเครื่อง Pi 3B** ต้อง copy `piradio-poweroff-helper.py`/`.service` ไปที่ host แล้ว enable systemd service เอง (ดูขั้นตอนติดตั้งด้านล่าง) ก่อนที่ `docker compose up -d --build` รอบถัดไปปุ่ม Power Off ในหน้าเว็บถึงจะทำงานได้จริงบน Pi 3B
+- Pi Zero 2 W ไม่ได้รับผลกระทบใดๆ เพราะไม่เคยตั้ง env var `PIRADIO_POWEROFF_SOCKET` เลย โค้ดจึง fallback ไปใช้ `sudo /sbin/poweroff` แบบเดิมเป๊ะ
+
+## ขั้นตอนติดตั้งบน Pi 3B (host, นอก container)
+
+1. จากเครื่อง Windows (ในโฟลเดอร์ `Docker/scripts`) scp ไฟล์ไปไว้ที่ **home directory** ของ `pi3@piradio3b` ก่อน (ห้าม scp ตรงไปที่ `/usr/local/bin` หรือ `/etc/systemd/system` เด็ดขาด เพราะ user `pi3` ผ่าน SFTP ไม่มีสิทธิ์เขียนโฟลเดอร์ระบบ จะได้ `Permission denied` เงียบๆ):
+   ```powershell
+   scp .\piradio-poweroff-helper.py pi3@piradio3b:~/
+   scp .\piradio-poweroff-helper.service pi3@piradio3b:~/
+   ```
+2. SSH เข้าเครื่อง Pi 3B แล้วค่อยใช้ `sudo cp` ย้ายไฟล์จาก home directory เข้าตำแหน่งจริง (รันคำสั่งต่อไปนี้ **บน Pi ผ่าน SSH เท่านั้น** ไม่ใช่ใน terminal ของ Windows):
+   ```bash
+   ssh pi3@piradio3b
+   sudo cp ~/piradio-poweroff-helper.py /usr/local/bin/piradio-poweroff-helper.py
+   sudo chmod 755 /usr/local/bin/piradio-poweroff-helper.py
+   sudo cp ~/piradio-poweroff-helper.service /etc/systemd/system/piradio-poweroff-helper.service
+   ```
+3. Reload systemd แล้ว enable + start service:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now piradio-poweroff-helper.service
+   sudo systemctl status piradio-poweroff-helper.service
+   ```
+   ต้องขึ้นสถานะ `active (running)` และคำสั่ง `ls -l /run/piradio/poweroff.sock` ต้องเห็นไฟล์ socket อยู่ (permission `srw-------` เจ้าของ root)
+4. Deploy โค้ดที่แก้แล้ว (`app.py`, `Docker/compose.yaml`) เข้าไปที่ `~/radio-server/` แล้ว rebuild container ตามปกติ:
+   ```bash
+   cd ~/radio-server/Docker
+   docker compose up -d --build
+   ```
+5. ทดสอบ:
+   - เข้าเว็บ `http://<IP ของ Pi 3B>:5000` กดปุ่ม Power Off แดง แล้วเครื่องต้องปิดจริง
+   - ถ้ากดแล้วไม่มีอะไรเกิดขึ้น ให้ตรวจ log ของ helper ด้วย `journalctl -u piradio-poweroff-helper.service -f` ระหว่างกดปุ่ม และตรวจว่า container เห็น socket ไหมด้วย `docker compose exec piradio ls -l /run/piradio/`
+
+## ข้อควรทราบเพิ่มเติม
+
+- Helper service ต้อง **enable ไว้ถาวร** (`systemctl enable`) ไม่ใช่แค่ `start` ครั้งเดียว เพราะ `/run` เป็น tmpfs จะหายไปทุกครั้งที่รีบูต ต้องให้ systemd สร้าง socket ใหม่ตอนบูตทุกครั้ง
+- ถ้าย้าย/เปลี่ยนชื่อ container หรือรัน container ด้วย user ที่ไม่ใช่ root ในอนาคต ต้องทบทวน permission ของ socket (`0600` root:root) ใหม่ เพราะตอนนี้ใช้ได้เพราะ container รันเป็น root (ไม่มี `USER` ใน `Docker/Dockerfile`)
+- ยังไม่ได้ทดสอบบนฮาร์ดแวร์ Pi 3B จริง (โค้ด compile ผ่านและ diagnostics ไม่มี error เท่านั้น) ต้องทดสอบตามขั้นตอนข้างบนก่อนถือว่าใช้งานได้จริง
+
