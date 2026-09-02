@@ -2,13 +2,13 @@
 
 เอกสารนี้เป็นขั้นตอนสำหรับ Raspberry Pi 3B ที่เพิ่งติดตั้ง Raspberry Pi OS แบบ headless เพื่อทดสอบ Docker deployment ของโปรเจกต์นี้
 
-ชุดนี้รองรับ Internet Radio, DLNA, MPD, การเก็บข้อมูลสถานีใน volume และ Bluetooth speaker. Wi-Fi settings และ Power Off จากหน้าเว็บยังไม่รวมในการทดสอบนี้
+ชุดนี้รองรับ Internet Radio, DLNA, MPD, การเก็บข้อมูลสถานีใน volume, Bluetooth speaker และ Power Off จากหน้าเว็บ (ผ่าน host helper แยกต่างหาก). Wi-Fi settings จากหน้าเว็บยังไม่รวมในการทดสอบนี้
 
 ## สรุปลำดับการติดตั้ง
 
-ทำตามลำดับนี้เพื่อให้ระบุปัญหาได้ง่าย: ติดตั้ง Docker/MPD บน host > ยืนยัน `mpc status` > ส่ง source > build/start container > ทดสอบ Radio และ volume > ติดตั้ง BlueZ/BlueALSA > ตั้ง MPD Bluetooth output > rebuild container > pair/connect speaker และทดสอบเสียง
+ทำตามลำดับนี้เพื่อให้ระบุปัญหาได้ง่าย: ติดตั้ง Docker/MPD บน host > ยืนยัน `mpc status` > ส่ง source > build/start container > ทดสอบ Radio และ volume > ติดตั้ง BlueZ/BlueALSA > ตั้ง MPD Bluetooth output > rebuild container > pair/connect speaker และทดสอบเสียง > ติดตั้ง poweroff helper บน host > ทดสอบปุ่ม Power Off
 
-MPD, BlueZ และ BlueALSA ทำงานบน Pi host. Container ทำหน้าที่เป็น Flask web app, `mpc` client และ `bluetoothctl` client เท่านั้น
+MPD, BlueZ, BlueALSA และ poweroff helper ทำงานบน Pi host. Container ทำหน้าที่เป็น Flask web app, `mpc` client, `bluetoothctl` client และ client ของ poweroff helper (ผ่าน Unix socket) เท่านั้น — container เองไม่มี `sudo` หรือสิทธิ์ปิดเครื่อง host โดยตรง
 
 ## สิ่งที่ต้องเตรียม
 
@@ -302,6 +302,54 @@ mpc status
 
 Mount system D-Bus ทำให้ process ใน container ควบคุม Bluetooth ของ Pi ได้. หน้าเว็บนี้ไม่มี authentication จึงควรใช้เฉพาะ LAN ที่เชื่อถือได้ และห้าม port-forward port 5000 ออก Internet
 
+## 9. เปิดใช้ Power Off จากหน้าเว็บ
+
+Container ไม่มี `sudo` และไม่มีสิทธิ์สั่งปิดเครื่องจริงของ host (ไม่เปิด `privileged: true` เพราะให้สิทธิ์เกินจำเป็น) ดังนั้นปุ่ม Power Off บนหน้าเว็บทำงานผ่าน **host helper** แยกต่างหาก: เป็นสคริปต์ Python เล็กๆ ที่รันบน Pi host โดยตรง (นอก container) ฟัง Unix socket ที่ `/run/piradio/poweroff.sock` แล้วสั่ง `poweroff` จริงเมื่อได้รับคำขอจาก container
+
+ไฟล์ที่ต้องใช้อยู่ใน `Docker/scripts/piradio-poweroff-helper.py` และ `Docker/scripts/piradio-poweroff-helper.service` (มากับ source ที่ scp ไปแล้วตามหัวข้อ 4)
+
+### ติดตั้ง helper บน host
+
+ไฟล์ระบบอย่าง `/usr/local/bin` และ `/etc/systemd/system` เขียนตรงผ่าน `scp`/SFTP ด้วย user ธรรมดาไม่ได้ (permission denied) ต้อง `sudo cp` จากไฟล์ที่อยู่ใน `~/radio-server/Docker/scripts` อีกที:
+
+```bash
+cd ~/radio-server/Docker/scripts
+sudo cp piradio-poweroff-helper.py /usr/local/bin/piradio-poweroff-helper.py
+sudo chmod 755 /usr/local/bin/piradio-poweroff-helper.py
+sudo cp piradio-poweroff-helper.service /etc/systemd/system/piradio-poweroff-helper.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now piradio-poweroff-helper.service
+sudo systemctl status piradio-poweroff-helper.service --no-pager
+```
+
+ต้องเห็นสถานะ `active (running)` และไฟล์ socket ต้องถูกสร้างด้วย permission `0600` เจ้าของ root:
+
+```bash
+ls -l /run/piradio/poweroff.sock
+```
+
+### เปิดใช้งานฝั่ง container
+
+`Docker/compose.yaml` ตั้ง env var `PIRADIO_POWEROFF_SOCKET=/run/piradio/poweroff.sock` และ bind mount `/run/piradio:/run/piradio` ไว้ให้แล้ว หลังติดตั้ง helper เสร็จ ให้ rebuild container เพื่อให้ mount มีผล:
+
+```bash
+cd ~/radio-server/Docker
+docker compose up -d --build
+docker compose exec piradio ls -l /run/piradio/
+```
+
+ต้องเห็นไฟล์ `poweroff.sock` จากใน container ด้วย (แปลว่า mount ผ่าน)
+
+### ทดสอบ
+
+เปิดหน้าเว็บที่ `http://<pi-ip>:5000` แล้วกดปุ่ม Power Off (ปุ่มแดง) เครื่อง Pi ต้องปิดจริง หากต้องการดู log ระหว่างทดสอบ:
+
+```bash
+journalctl -u piradio-poweroff-helper.service -f
+```
+
+Helper service ต้อง `enable` ไว้ถาวร (ไม่ใช่แค่ `start`) เพราะ `/run` เป็น tmpfs หายทุกครั้งที่รีบูต ต้องให้ systemd สร้าง socket ใหม่ตอนบูตทุกครั้ง. ฟีเจอร์นี้แยกจาก Pi Zero 2W (bare-metal) โดยสมบูรณ์ — ถ้าไม่ตั้ง `PIRADIO_POWEROFF_SOCKET` แอปจะ fallback ไปใช้ `sudo /sbin/poweroff` แบบเดิมของ deployment แบบไม่ใช้ Docker
+
 ## คำสั่งใช้งานประจำ
 
 ```bash
@@ -427,6 +475,24 @@ sudo rfkill unblock bluetooth
 ### Wi-Fi ในเว็บขึ้น unavailable
 
 เป็นพฤติกรรมที่คาดไว้ เพราะ Docker image ชุดนี้ยังไม่ติดตั้ง `nmcli` หรือ host authorization ที่จำเป็นสำหรับ feature นี้
+
+### กด Power Off แล้วไม่มีอะไรเกิดขึ้น
+
+มักเกิดจากยังไม่ได้ติดตั้ง/enable poweroff helper บน host ตามหัวข้อ 9 หรือ container มองไม่เห็น socket ตรวจตามลำดับ:
+
+```bash
+sudo systemctl status piradio-poweroff-helper.service --no-pager
+ls -l /run/piradio/poweroff.sock
+cd ~/radio-server/Docker
+docker compose exec piradio ls -l /run/piradio/
+grep PIRADIO_POWEROFF_SOCKET compose.yaml
+curl -fsS http://127.0.0.1:5000/api/poweroff
+```
+
+1. หาก service ไม่ `active` ให้ `sudo systemctl enable --now piradio-poweroff-helper.service` ใหม่ แล้วดู log ด้วย `journalctl -u piradio-poweroff-helper.service -n 50 --no-pager`
+2. หาก socket ไม่มีบน host เลย (`/run/piradio/poweroff.sock`) แปลว่า service ยังไม่เคย start สำเร็จ หรือเพิ่งรีบูตแล้ว service ไม่ได้ enable ไว้ (ดูหัวข้อ 9)
+3. หาก socket มีบน host แต่ container มองไม่เห็น (`docker compose exec piradio ls -l /run/piradio/` ว่างเปล่า) แปลว่า `compose.yaml` ยังไม่มี bind mount `/run/piradio:/run/piradio` หรือยังไม่ได้ rebuild container หลังแก้ ให้ `docker compose up -d --build` ใหม่
+4. `curl .../api/poweroff` ตอบ `{"status": "unavailable"}` แปลว่า container เชื่อมต่อ socket ไม่ได้ (permission หรือ path ผิด) ส่วน `{"status": "shutting down"}` แปลว่าคำสั่งไปถึง helper แล้วและเครื่องกำลังจะปิดจริง
 
 ### รีสตาร์ต/ปิดเครื่องแล้วไม่กลับมาเล่นสถานีวิทยุ หรือ output เดิม (เล่นเพลงจาก media server/DLNA ค้างมาแทน)
 
