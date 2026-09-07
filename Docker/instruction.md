@@ -234,13 +234,13 @@ apt search bluez-alsa
 aplay -L | grep bluealsa
 ```
 
-เปิด speaker ให้อยู่ใน pairing mode แล้วหา MAC address. เมื่อเชื่อมจากหน้าเว็บสำเร็จ ให้ใช้ผลลัพธ์นี้ยืนยัน MAC ที่ connected:
+เปิด speaker ให้อยู่ใน pairing mode. หลังเชื่อมจากหน้าเว็บสำเร็จ สามารถใช้คำสั่งนี้ยืนยันว่า speaker connected แล้ว:
 
 ```bash
 bluetoothctl devices Connected
 ```
 
-จากนั้นตั้ง MPD output สำหรับ speaker หนึ่งตัว. แทน `<speaker-mac>` ด้วย MAC address ของ speaker เช่น `AA:BB:CC:DD:EE:FF`:
+จากนั้นตั้ง MPD output ครั้งเดียว โดยไม่ต้องใส่ MAC address ของ speaker. เมื่อกด Connect จากหน้าเว็บ โปรแกรมจะนำ MAC ของ speaker ที่เชื่อมสำเร็จมาอัปเดต output นี้และ restart MPD ให้อัตโนมัติ จึงสลับใช้ลำโพงหลายตัวได้โดยไม่ต้องแก้ `/etc/mpd.conf` เอง:
 
 ```bash
 sudo nano /etc/mpd.conf
@@ -252,12 +252,12 @@ sudo nano /etc/mpd.conf
 audio_output {
    type            "alsa"
    name            "Bluetooth Speaker"
-   device          "bluealsa:DEV=<speaker-mac>,PROFILE=a2dp"
+   device          "bluealsa:DEV=00:00:00:00:00:00,PROFILE=a2dp"
    mixer_type      "software"
 }
 ```
 
-Restart MPD และตรวจว่า output ถูกพบ:
+MAC `00:00:00:00:00:00` เป็นค่าเริ่มต้นเท่านั้น และจะถูกแทนที่อัตโนมัติหลังเชื่อม speaker ครั้งแรก. Restart MPD และตรวจว่า output ถูกพบ:
 
 ```bash
 sudo systemctl restart mpd
@@ -271,6 +271,8 @@ mpc status
 mpc disable <existing-output-id>
 mpc enable <bluetooth-output-id>
 ```
+
+ฟีเจอร์อัปเดต MAC อัตโนมัติต้องใช้ host helper เวอร์ชันใหม่ตามหัวข้อ 9. หากเคยติดตั้ง helper ไว้ก่อนอัปเดตโค้ดนี้ ให้รันคำสั่งติดตั้งในหัวข้อ 9 ซ้ำ; คำสั่ง `restart` ในขั้นตอนนั้นจำเป็นเพื่อให้ helper โหลดโค้ดใหม่ก่อนทดสอบ Connect speaker.
 
 ส่ง Docker files ที่แก้ไขแล้วจาก Windows ตามหัวข้อ 4 แล้ว rebuild container เพื่อเพิ่ม `bluetoothctl` และ mount system D-Bus socket:
 
@@ -287,7 +289,7 @@ curl -fsS http://127.0.0.1:5000/api/bluetooth/status
 
 `grep bluez Dockerfile` ต้องแสดง `bluez mpc` และ `grep system_bus_socket compose.yaml` ต้องแสดง D-Bus mount. การ build แบบ `--no-cache` และ `--force-recreate` สำคัญเมื่อ container เดิมขึ้น error `bluetoothctl: executable file not found in $PATH`; error นี้หมายถึง container ยังใช้ image เก่า
 
-ผลของ API ต้องมี `"available":true`. เปิดหน้าเว็บที่ `http://<pi-ip>:5000`, เข้า Settings > Bluetooth, เปิด Bluetooth, กด Scan for Devices และเลือก Connect ที่ speaker. เมื่อเชื่อมสำเร็จ เว็บจะเปิด MPD output ชื่อ `Bluetooth Speaker` อัตโนมัติ
+ผลของ API ต้องมี `"available":true`. เปิดหน้าเว็บที่ `http://<pi-ip>:5000`, เข้า Settings > Bluetooth, เปิด Bluetooth, กด Scan for Devices และเลือก Connect ที่ speaker. เมื่อเชื่อมสำเร็จ โปรแกรมจะอัปเดต MAC ใน MPD output ชื่อ `Bluetooth Speaker`, restart MPD และเปิด output นี้อัตโนมัติ
 
 ทดสอบบน Pi:
 
@@ -302,35 +304,50 @@ mpc status
 
 Mount system D-Bus ทำให้ process ใน container ควบคุม Bluetooth ของ Pi ได้. หน้าเว็บนี้ไม่มี authentication จึงควรใช้เฉพาะ LAN ที่เชื่อถือได้ และห้าม port-forward port 5000 ออก Internet
 
-## 9. เปิดใช้ Power Off จากหน้าเว็บ
+## 9. เปิดใช้ Host Helper สำหรับ Power Off และ Bluetooth Speaker
 
-Container ไม่มี `sudo` และไม่มีสิทธิ์สั่งปิดเครื่องจริงของ host (ไม่เปิด `privileged: true` เพราะให้สิทธิ์เกินจำเป็น) ดังนั้นปุ่ม Power Off บนหน้าเว็บทำงานผ่าน **host helper** แยกต่างหาก: เป็นสคริปต์ Python เล็กๆ ที่รันบน Pi host โดยตรง (นอก container) ฟัง Unix socket ที่ `/run/piradio/poweroff.sock` แล้วสั่ง `poweroff` จริงเมื่อได้รับคำขอจาก container
+Container ไม่มี `sudo` และไม่มีสิทธิ์เขียน `/etc/mpd.conf` หรือสั่งปิดเครื่องจริงของ host (ไม่เปิด `privileged: true` เพราะให้สิทธิ์เกินจำเป็น) ดังนั้นใช้ **host helper** แยกต่างหาก: เป็นสคริปต์ Python เล็กๆ ที่รันบน Pi host โดยตรง (นอก container) และเปิด Unix socket สองตัว:
+
+- `/run/piradio/poweroff.sock` สำหรับปุ่ม Power Off
+- `/run/piradio/mpd-config.sock` สำหรับอัปเดต MAC ใน MPD output `Bluetooth Speaker` และ restart MPD อัตโนมัติเมื่อ Connect speaker ใหม่
+
+หัวข้อนี้ใช้เฉพาะ Pi ที่ deploy ด้วย Docker Compose. Pi Zero 2W แบบ bare-metal ใช้ helper ผ่าน `sudo` โดยตรงแทน ดูขั้นตอนติดตั้งและ sudoers ใน [installation-guide.md](../installation-guide.md).
 
 ไฟล์ที่ต้องใช้อยู่ใน `Docker/scripts/piradio-poweroff-helper.py` และ `Docker/scripts/piradio-poweroff-helper.service` (มากับ source ที่ scp ไปแล้วตามหัวข้อ 4)
 
 ### ติดตั้ง helper บน host
 
-ไฟล์ระบบอย่าง `/usr/local/bin` และ `/etc/systemd/system` เขียนตรงผ่าน `scp`/SFTP ด้วย user ธรรมดาไม่ได้ (permission denied) ต้อง `sudo cp` จากไฟล์ที่อยู่ใน `~/radio-server/Docker/scripts` อีกที:
+ไฟล์ระบบอย่าง `/usr/local/bin` และ `/etc/systemd/system` เขียนตรงผ่าน `scp`/SFTP ด้วย user ธรรมดาไม่ได้ (permission denied) ต้องติดตั้งไฟล์จาก `~/radio-server/Docker/scripts` ด้วย `sudo` ก่อนเสมอ **ห้ามรัน `systemctl enable` ทันทีเพียงเพราะอยู่ในโฟลเดอร์ `scripts`** เพราะ systemd จะยังไม่เห็น unit และจะแจ้ง `Unit piradio-poweroff-helper.service does not exist`:
 
 ```bash
 cd ~/radio-server/Docker/scripts
-sudo cp piradio-poweroff-helper.py /usr/local/bin/piradio-poweroff-helper.py
-sudo chmod 755 /usr/local/bin/piradio-poweroff-helper.py
-sudo cp piradio-poweroff-helper.service /etc/systemd/system/piradio-poweroff-helper.service
+sudo install -m 755 piradio-poweroff-helper.py /usr/local/bin/piradio-poweroff-helper.py
+sudo install -m 644 piradio-poweroff-helper.service /etc/systemd/system/piradio-poweroff-helper.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now piradio-poweroff-helper.service
+sudo systemctl restart piradio-poweroff-helper.service
 sudo systemctl status piradio-poweroff-helper.service --no-pager
 ```
 
-ต้องเห็นสถานะ `active (running)` และไฟล์ socket ต้องถูกสร้างด้วย permission `0600` เจ้าของ root:
+คำสั่ง `restart` ต้องรันแม้ service เดิมเป็น `active (running)` เพราะ `enable --now` จะไม่ restart process ที่ทำงานอยู่ และ helper เวอร์ชันเดิมจะยังไม่มี socket `mpd-config.sock`.
+
+หากยังขึ้นว่าไม่พบ unit ให้ตรวจว่าไฟล์ถูกติดตั้งจริงก่อน แล้วค่อย `daemon-reload` และ `enable` ซ้ำ:
 
 ```bash
-ls -l /run/piradio/poweroff.sock
+sudo ls -l /etc/systemd/system/piradio-poweroff-helper.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now piradio-poweroff-helper.service
+```
+
+ต้องเห็นสถานะ `active (running)` และ socket ทั้งสองต้องถูกสร้างด้วย permission `0600` เจ้าของ root:
+
+```bash
+ls -l /run/piradio/poweroff.sock /run/piradio/mpd-config.sock
 ```
 
 ### เปิดใช้งานฝั่ง container
 
-`Docker/compose.yaml` ตั้ง env var `PIRADIO_POWEROFF_SOCKET=/run/piradio/poweroff.sock` และ bind mount `/run/piradio:/run/piradio` ไว้ให้แล้ว หลังติดตั้ง helper เสร็จ ให้ rebuild container เพื่อให้ mount มีผล:
+`Docker/compose.yaml` ตั้ง env var สำหรับ Power Off และ MPD config helper รวมถึง bind mount `/run/piradio:/run/piradio` ไว้ให้แล้ว หลังติดตั้ง helper เสร็จ ให้ rebuild container เพื่อให้ mount มีผล:
 
 ```bash
 cd ~/radio-server/Docker
@@ -338,7 +355,7 @@ docker compose up -d --build
 docker compose exec piradio ls -l /run/piradio/
 ```
 
-ต้องเห็นไฟล์ `poweroff.sock` จากใน container ด้วย (แปลว่า mount ผ่าน)
+ต้องเห็นทั้ง `poweroff.sock` และ `mpd-config.sock` จากใน container (แปลว่า mount ผ่าน)
 
 ### ทดสอบ
 
@@ -448,7 +465,7 @@ mpc status
 
 1. หากไม่มี speaker ใน `devices Connected` ให้ reconnect จากหน้าเว็บหรือ `bluetoothctl`
 2. หาก `bluealsa:` ไม่ปรากฏ ให้ติดตั้ง/เปิด `bluez-alsa-utils` และ `bluealsa` ตามหัวข้อ 8
-3. หาก `mpc outputs` ไม่มี `Bluetooth Speaker` ให้เพิ่ม block MPD ตามหัวข้อ 8 โดยใช้ MAC ของ speaker ที่ connected อยู่ แล้ว `sudo systemctl restart mpd`
+3. หาก `mpc outputs` ไม่มี `Bluetooth Speaker` ให้เพิ่ม block MPD ตามหัวข้อ 8 โดยใช้ค่าเริ่มต้น `00:00:00:00:00:00` แล้ว `sudo systemctl restart mpd`; MAC ของ speaker จะถูกอัปเดตอัตโนมัติเมื่อ Connect จากหน้าเว็บ โดย host helper ต้องเป็นเวอร์ชันใหม่ตามหัวข้อ 9
 4. หากมี output แล้วแต่ไม่ active ให้ `mpc enable <bluetooth-output-id>` และ disable output อื่นที่ไม่ต้องการ
 5. หาก `mpc status` ไม่แสดง `playing` ให้เลือกสถานีแล้วกด Play ใหม่จากหน้าเว็บ
 

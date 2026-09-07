@@ -1247,6 +1247,39 @@ def resume():
     return {"status": "playing" if ok else "unavailable"}
 
 POWEROFF_SOCKET_PATH = os.environ.get("PIRADIO_POWEROFF_SOCKET")
+MPD_CONFIG_SOCKET_PATH = os.environ.get("PIRADIO_MPD_CONFIG_SOCKET")
+DEPLOYMENT_MODE = os.environ.get("PIRADIO_DEPLOYMENT_MODE", "bare-metal")
+BARE_METAL_MPD_CONFIG_HELPER = "/usr/local/sbin/piradio-update-mpd-bluetooth"
+
+
+def send_host_helper_command(socket_path, command):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(5)
+            client.connect(socket_path)
+            client.sendall(command)
+            return client.recv(256).strip() == b"ok"
+    except OSError:
+        return False
+
+
+def configure_bluetooth_mpd_output(mac):
+    if DEPLOYMENT_MODE == "docker":
+        return MPD_CONFIG_SOCKET_PATH and send_host_helper_command(
+            MPD_CONFIG_SOCKET_PATH, f"set-bluetooth-mac {mac}".encode()
+        )
+
+    try:
+        result = subprocess.run(
+            ["sudo", BARE_METAL_MPD_CONFIG_HELPER, mac],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+    return result.returncode == 0
 
 
 @app.route("/api/poweroff")
@@ -1254,15 +1287,9 @@ def poweroff():
     # Docker deployment: no sudo/capabilities in the container, so ask the
     # host-side helper (Docker/scripts/piradio-poweroff-helper.py) to shut down instead.
     if POWEROFF_SOCKET_PATH:
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(3)
-                s.connect(POWEROFF_SOCKET_PATH)
-                s.sendall(b"poweroff")
-                s.recv(64)
+        if send_host_helper_command(POWEROFF_SOCKET_PATH, b"poweroff"):
             return {"status": "shutting down"}
-        except OSError:
-            return {"status": "unavailable"}
+        return {"status": "unavailable"}
 
     try:
         subprocess.Popen(["sudo", "/sbin/poweroff"])
@@ -1322,12 +1349,15 @@ def bluetooth_connect():
     payload = request.get_json(silent=True) or {}
     mac = (payload.get("mac") or "").strip()
 
-    if not mac:
-        return {"error": "mac is required"}, 400
+    if not re.fullmatch(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}", mac):
+        return {"error": "a valid Bluetooth MAC address is required"}, 400
 
     ok, message = bluetooth_connect_device(mac)
     if not ok:
         return {"error": message}, 503
+
+    if not configure_bluetooth_mpd_output(mac):
+        return {"error": "connected, but could not configure the MPD Bluetooth output"}, 503
 
     switch_mpd_output(MPD_OUTPUT_BLUETOOTH, MPD_OUTPUT_HEADPHONE)
     save_audio_state("bluetooth", mac)

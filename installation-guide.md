@@ -97,11 +97,11 @@ audio_output {
 audio_output {
     type "alsa"
     name "Bluetooth Speaker"
-    device "bluealsa"
+    device "bluealsa:DEV=00:00:00:00:00:00,PROFILE=a2dp"
 }
 ```
 
-หาการ์ดเสียงจริงด้วย `aplay -l` แล้วแทนที่ `device` ให้ตรงกับเครื่อง จากนั้น:
+MAC `00:00:00:00:00:00` เป็นค่าเริ่มต้นเท่านั้น; เมื่อเชื่อม speaker จากหน้าเว็บ แอปจะอัปเดต MAC ใน block `Bluetooth Speaker` และ restart MPD ให้อัตโนมัติหลังตั้งค่า helper ในหัวข้อ 7. หาการ์ดเสียงจริงด้วย `aplay -l` แล้วแทนที่ `device` ของ `USB Headphone` ให้ตรงกับเครื่อง จากนั้น:
 
 ```bash
 sudo systemctl restart mpd
@@ -168,23 +168,24 @@ python app.py
 **ปัญหาที่พบบ่อย**: เปิดหน้าเว็บได้แต่กด Play แล้วไม่มีเสียง/ `/api/status` เป็น `unavailable`
 วิธีแก้: ตรวจว่า `mpc` ติดตั้งและเรียกได้จาก user ที่รันแอป ด้วย `which mpc` และ `mpc status`; ดูหัวข้อ 3
 
-## 7. ตั้งค่า sudoers สำหรับ Wi-Fi และ Power Off
+## 7. ตั้งค่า sudoers สำหรับ Wi-Fi, Power Off และ Bluetooth Speaker
 
-แอปเรียก `sudo nmcli` และ `sudo /sbin/poweroff` เพื่อให้คำสั่งจากหน้าเว็บมีผลกับเครื่องจริง ต้องอนุญาตเฉพาะคำสั่งนี้แบบไม่ถามรหัสผ่านให้ user ที่รันแอป:
+แอปเรียก `sudo nmcli`, `sudo /sbin/poweroff` และ helper สำหรับเปลี่ยน MPD Bluetooth output เพื่อให้คำสั่งจากหน้าเว็บมีผลกับเครื่องจริง ต้องติดตั้ง helper และอนุญาตเฉพาะคำสั่งนี้แบบไม่ถามรหัสผ่านให้ user ที่รันแอป:
 
 ```bash
 command -v nmcli
 command -v poweroff
+sudo install -m 755 scripts/piradio-update-mpd-bluetooth.py /usr/local/sbin/piradio-update-mpd-bluetooth
 sudo visudo -f /etc/sudoers.d/radio-server
 ```
 
 เพิ่มบรรทัดนี้ในไฟล์ (แทน `<pi-user>` และ path ด้วยค่าจริงจากคำสั่ง `command -v` ด้านบน):
 
 ```sudoers
-<pi-user> ALL=(root) NOPASSWD: /usr/bin/nmcli, /sbin/poweroff
+<pi-user> ALL=(root) NOPASSWD: /usr/bin/nmcli, /sbin/poweroff, /usr/local/sbin/piradio-update-mpd-bluetooth *
 ```
 
-บันทึกแล้วตรวจ syntax อัตโนมัติจาก `visudo` (จะแจ้ง error ถ้าพิมพ์ผิด)
+แทน `<pi-user>` ด้วย user ที่รัน `radio.service` จริง. Helper ตรวจ MAC address ก่อนแก้ `/etc/mpd.conf` และ restart MPD เฉพาะเมื่อ MAC ถูกต้อง บันทึกแล้วตรวจ syntax อัตโนมัติจาก `visudo` (จะแจ้ง error ถ้าพิมพ์ผิด)
 
 **ปัญหาที่พบบ่อย**: กด "ปิดเครื่อง" หรือเชื่อมต่อ Wi-Fi จากหน้าเว็บแล้วไม่มีผล/ค้าง
 วิธีแก้: ตรวจว่า sudoers ไฟล์ระบุ path ตรงกับ `command -v nmcli`/`command -v poweroff` จริง (บาง OS อยู่ที่ `/usr/sbin/poweroff`) และ user ที่รัน systemd service ตรงกับ user ใน sudoers rule ทดสอบตรง ๆ ด้วย `sudo -u <pi-user> sudo nmcli general status`
@@ -240,6 +241,7 @@ ExecStart=/home/<pi-user>/radio-server/.venv/bin/python /home/<pi-user>/radio-se
 Restart=on-failure
 RestartSec=3
 Environment=PIRADIO_PORT=5000
+Environment=PIRADIO_DEPLOYMENT_MODE=bare-metal
 
 [Install]
 WantedBy=multi-user.target
