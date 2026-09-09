@@ -709,25 +709,26 @@ def parse_bluetooth_mac_set(list_output):
     return macs
 
 
-def parse_bluetooth_devices(devices_output, paired_macs, connected_macs):
+def parse_bluetooth_devices(devices_output, paired_macs, connected_macs, connected_output=""):
     devices = []
     seen = set()
-    for line in (devices_output or "").splitlines():
-        match = re.match(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line.strip())
-        if not match:
-            continue
+    for output in (devices_output, connected_output):
+        for line in (output or "").splitlines():
+            match = re.match(r"Device\s+([0-9A-Fa-f:]{17})(?:\s+(.*))?", line.strip())
+            if not match:
+                continue
 
-        mac, name = match.group(1), match.group(2).strip()
-        if mac in seen:
-            continue
-        seen.add(mac)
+            mac, name = match.group(1), (match.group(2) or "").strip()
+            if mac in seen:
+                continue
+            seen.add(mac)
 
-        devices.append({
-            "mac": mac,
-            "name": name or mac,
-            "paired": mac in paired_macs,
-            "connected": mac in connected_macs
-        })
+            devices.append({
+                "mac": mac,
+                "name": name or mac,
+                "paired": mac in paired_macs,
+                "connected": mac in connected_macs
+            })
 
     return devices
 
@@ -743,7 +744,7 @@ def list_bluetooth_devices():
     paired_macs = parse_bluetooth_mac_set(paired_output)
     connected_macs = parse_bluetooth_mac_set(connected_output)
 
-    return parse_bluetooth_devices(all_output, paired_macs, connected_macs)
+    return parse_bluetooth_devices(all_output, paired_macs, connected_macs, connected_output)
 
 
 def scan_bluetooth_devices(duration=BLUETOOTH_SCAN_SECONDS):

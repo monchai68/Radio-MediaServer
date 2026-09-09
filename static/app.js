@@ -1194,6 +1194,7 @@ function renderBluetoothDevices(devices) {
 <div class="admin-item">
 <div class="device-item-main">
 <span class="device-item-name">${escapeHtml(d.name)}</span>
+    <span class="device-item-mac">${safeMac}</span>
 <span class="device-item-status${statusClass}" id="btStatus-${safeMac}">${statusText}</span>
 </div>
 <div class="admin-actions">
