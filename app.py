@@ -652,6 +652,15 @@ def mpc_output_id_by_name(name):
 
 def switch_mpd_output(enable_name, disable_name):
     """Route MPD audio to enable_name and mute disable_name to avoid duplicate/silent playback."""
+    # Adapt to different environments: Pi Zero 2W uses 'USB Headphone' while Pi 3B (Docker) uses 'My ALSA Device'
+    if enable_name == "USB Headphone" and not mpc_output_id_by_name("USB Headphone"):
+        if mpc_output_id_by_name("My ALSA Device"):
+            enable_name = "My ALSA Device"
+            
+    if disable_name == "USB Headphone" and not mpc_output_id_by_name("USB Headphone"):
+        if mpc_output_id_by_name("My ALSA Device"):
+            disable_name = "My ALSA Device"
+
     enable_id = mpc_output_id_by_name(enable_name)
     disable_id = mpc_output_id_by_name(disable_name)
 

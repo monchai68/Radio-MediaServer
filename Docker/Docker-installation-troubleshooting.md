@@ -132,3 +132,53 @@ journalctl -u bluealsa -n 80 --no-pager
 journalctl -u mpd -n 80 --no-pager
 journalctl -u piradio-poweroff-helper.service -n 80 --no-pager
 ```
+## ตั้ง Fixed IP แล้ว reboot แต่เข้า Pi Radio ไม่ได้
+
+### อาการ
+
+หลังตั้งค่า Fixed IP ด้วย `nmcli` และ reboot แล้ว Pi เชื่อมต่อ Wi-Fi ได้ (`wlan0` เป็น `connected`) แต่ไม่สามารถ SSH หรือเปิดหน้า Pi Radio จากเครื่องอื่นในเครือข่ายได้
+
+ตัวอย่างค่าที่ผิด:
+
+```text
+inet 192.168.1.110/32
+```
+
+และ `ip route` ไม่มี route ของ LAN เช่น `192.168.1.0/24`
+
+### สาเหตุ
+
+ตั้งค่า subnet prefix ผิดเป็น `/32` ทำให้ Pi มองเห็นเพียง IP ของตัวเอง ไม่สามารถสื่อสารกับอุปกรณ์อื่นในเครือข่าย `192.168.1.x` ได้ตามปกติ
+
+สำหรับเครือข่ายทั่วไปที่ Router/Gateway คือ `192.168.1.1` และ subnet mask คือ `255.255.255.0` ต้องใช้ prefix `/24`
+
+### วิธีแก้
+
+ตรวจชื่อ Wi-Fi connection ที่กำลังใช้งาน:
+
+```bash
+nmcli connection show --active
+```
+
+ตั้งค่า Fixed IP ใหม่ โดยเปลี่ยนชื่อ connection และ IP ให้ตรงกับเครือข่าย:
+
+```bash
+sudo nmcli connection modify "netplan-wlan0-M-Home_2.4" \
+  ipv4.method manual \
+  ipv4.addresses "192.168.1.110/24" \
+  ipv4.gateway "192.168.1.1" \
+  ipv4.dns "192.168.1.1,1.1.1.1"
+```
+
+เนื่องจากอาจเชื่อมต่อผ่าน SSH อยู่ ให้ reboot แทนการสั่งปิด/เปิด Wi-Fi connection:
+
+```bash
+sudo reboot
+```
+
+หลัง Pi boot แล้ว ตรวจสอบ:
+
+```bash
+ip -4 addr show wlan0
+ip route
+```
