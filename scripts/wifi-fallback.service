@@ -7,6 +7,9 @@ Wants=NetworkManager.service network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/wifi-fallback.sh
+# The script may wait up to WAIT_SECONDS (90) + saved-profile retries (~40s)
+TimeoutStartSec=180
+StandardOutput=journal+console
 
 [Install]
 WantedBy=multi-user.target

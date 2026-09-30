@@ -2,11 +2,11 @@
 
 เอกสารนี้เป็นขั้นตอนสำหรับ Raspberry Pi 3B ที่เพิ่งติดตั้ง Raspberry Pi OS แบบ headless เพื่อทดสอบ Docker deployment ของโปรเจกต์นี้
 
-ชุดนี้รองรับ Internet Radio, DLNA, MPD, การเก็บข้อมูลสถานีใน volume, Bluetooth speaker และ Power Off จากหน้าเว็บ (ผ่าน host helper แยกต่างหาก). Wi-Fi settings จากหน้าเว็บยังไม่รวมในการทดสอบนี้
+ชุดนี้รองรับ Internet Radio, DLNA, MPD, การเก็บข้อมูลสถานีใน volume, Bluetooth speaker, Power Off (ผ่าน host helper), Wi‑Fi scan/connect (ต้อง install `network-manager` ใน image ซึ่งทำไว้แล้ว) และ Wi‑Fi fallback hotspot (host-side). ดูหัวข้อ 10
 
 ## สรุปลำดับการติดตั้ง
 
-ทำตามลำดับนี้เพื่อให้ระบุปัญหาได้ง่าย: ติดตั้ง Docker/MPD บน host > ยืนยัน `mpc status` > ส่ง source > build/start container > ทดสอบ Radio และ volume > ติดตั้ง BlueZ/BlueALSA > ตั้ง MPD Bluetooth output > rebuild container > pair/connect speaker และทดสอบเสียง > ติดตั้ง poweroff helper บน host > ทดสอบปุ่ม Power Off
+ทำตามลำดับนี้เพื่อให้ระบุปัญหาได้ง่าย: ติดตั้ง Docker/MPD บน host > ยืนยัน `mpc status` > ส่ง source > build/start container > ทดสอบ Radio และ volume > ติดตั้ง BlueZ/BlueALSA > ตั้ง MPD Bluetooth output > rebuild container > pair/connect speaker และทดสอบเสียง > ติดตั้ง poweroff helper บน host > ติดตั้ง Wi‑Fi fallback hotspot บน host > ทดสอบปุ่ม Power Off และ fallback hotspot
 
 MPD, BlueZ, BlueALSA และ poweroff helper ทำงานบน Pi host. Container ทำหน้าที่เป็น Flask web app, `mpc` client, `bluetoothctl` client และ client ของ poweroff helper (ผ่าน Unix socket) เท่านั้น — container เองไม่มี `sudo` หรือสิทธิ์ปิดเครื่อง host โดยตรง
 
@@ -367,6 +367,84 @@ journalctl -u piradio-poweroff-helper.service -f
 
 Helper service ต้อง `enable` ไว้ถาวร (ไม่ใช่แค่ `start`) เพราะ `/run` เป็น tmpfs หายทุกครั้งที่รีบูต ต้องให้ systemd สร้าง socket ใหม่ตอนบูตทุกครั้ง. ฟีเจอร์นี้แยกจาก Pi Zero 2W (bare-metal) โดยสมบูรณ์ — ถ้าไม่ตั้ง `PIRADIO_POWEROFF_SOCKET` แอปจะ fallback ไปใช้ `sudo /sbin/poweroff` แบบเดิมของ deployment แบบไม่ใช้ Docker
 
+## 10. ติดตั้ง Wi‑Fi Fallback Hotspot (host-side)
+
+ฟีเจอร์นี้ทำงานบน **host OS** (ไม่ใช่ใน container) โดย `wifi-fallback.service` จะตรวจหลังบูตว่ามีเครือข่ายอินเทอร์เน็ตถึงหรือไม่ หากไม่ถึงภายในเวลาที่กำหนดจะเปิด hotspot ชื่อ `PiRadio-Setup` ให้อุปกรณ์อื่น (มือถือ/คอม) ต่อเข้าไปแล้วตั้งค่า Wi‑Fi จริงผ่านหน้าเว็บที่ `http://10.42.0.1:5000` (หรือ IP ของ hotspot)
+
+### หลักการทำงาน
+
+- Service รันหนึ่งครั้งตอนบูต (oneshot)
+- เช็คการเข้าถึงอินเทอร์เน็ตจริง (ping `8.8.8.8` / `1.1.1.1`) **ไม่ใช่แค่ดูว่า Wi‑Fi interface activated หรือไม่**
+- เช็คว่า ethernet ต่ออยู่และมีอินเทอร์เน็ตถึงก่อนเปิด hotspot
+- ใช้ state stamp (`/var/run/wifi-fallback-online.stamp`) ป้องกันการเปิด hotspot ซ้ำใน boot เดียวกัน
+- สคริปต์รุ่นนี้ (v2026-10-01) ป้องกัน hotspot เปิดผิดพลาดโดยเพิ่ม **ethernet check**, **internet reachability test**, **state stamp** และเวลา **90 วินาที**
+- ดูรายละเอียดเพิ่มเติมได้ที่ `~/radio-server/scripts/wifi-fallback.sh`
+
+> **สำคัญ**: hotspot นี้ไม่ได้ถูกติดตั้งอัตโนมัติใน Docker image ต้องติดตั้งบน host แยกต่างหากตามด้านล่าง
+
+### ก่อนเริ่ม
+
+ไฟล์ที่ใช้:
+- `~/radio-server/scripts/wifi-fallback.sh` — สคริปต์หลัก
+- `~/radio-server/scripts/wifi-fallback.service` — systemd unit
+
+(มากับ source ที่ scp ไปแล้วตามหัวข้อ 4)
+
+### ขั้นตอนติดตั้ง
+
+```bash
+cd ~/radio-server/scripts
+
+# (แนะนำ) เปลี่ยนรหัสผ่าน hotspot ก่อนติดตั้ง
+# sed -i 's/piradio1234/รหัสผ่านจริง/' wifi-fallback.sh
+
+sudo install -m 755 wifi-fallback.sh /usr/local/bin/wifi-fallback.sh
+sudo install -m 644 wifi-fallback.service /etc/systemd/system/wifi-fallback.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now wifi-fallback.service
+sudo systemctl status wifi-fallback.service --no-pager
+```
+
+### ตรวจสอบการทำงาน
+
+หลัง reboot รอประมาณ 2 นาที แล้วดู log:
+
+```bash
+sudo journalctl -u wifi-fallback.service -n 50 --no-pager
+```
+
+หากทุกอย่างปกติควรเห็นข้อความ:
+```
+[wifi-fallback] ... Internet is already reachable (ethernet or fast wifi). Hotspot not needed.
+```
+หรือ
+```
+[wifi-fallback] ... Internet reachable (via wifi or ethernet) after ~XXs. Hotspot not needed.
+```
+
+หากไม่เจอเครือข่ายเลยจะเห็น:
+```
+[wifi-fallback] ... Hotspot PiRadio-Setup is now active.
+```
+
+### การตั้งค่า Wi‑Fi จาก hotspot
+
+1. เปิด Wi‑Fi บนมือถือ/คอมพิวเตอร์
+2. เลือก SSID `PiRadio-Setup` ใส่รหัสผ่าน `piradio1234` (หรือรหัสที่เปลี่ยนไว้)
+3. เปิด browser ไปที่ `http://10.42.0.1:5000`
+4. เข้า Settings → Wi‑Fi → Scan → เลือก SSID จริง → กรอกรหัสผ่าน → Connect
+5. หน้าเว็บจะตัด hotspot และเชื่อมต่อ Wi‑Fi จริงให้อัตโนมัติ
+6. ครั้งถัดไปที่บูต host จะพยายามเชื่อมต่อ Wi‑Fi จริงโดยตรง
+
+### ข้อควรระวัง
+
+- **เปลี่ยนรหัสผ่าน hotspot ก่อนติดตั้ง**: ห้ามใช้รหัส `piradio1234` คาไว้ใน production
+- **Docker container ไม่เกี่ยวข้อง**: Wi‑Fi fallback นี้ทำงานบน host เท่านั้น Container ใช้ `network_mode: host` ดังนั้นเมื่อ host เชื่อมต่อ Wi‑Fi หรือเปิด hotspot ได้ container ก็จะใช้ network ตาม host อัตโนมัติ
+- **ไม่จำเป็นต้อง rebuild container**: การติดตั้งนี้แก้เฉพาะ host service ไม่เกี่ยวกับ Docker image
+- ถ้าใช้ ethernet หลักและไม่ต้องการ hotspot เลยให้ disable service ทิ้ง:
+  ```bash
+  sudo systemctl disable --now wifi-fallback.service
+  ```
 ## คำสั่งใช้งานประจำ
 
 ```bash
@@ -491,7 +569,23 @@ sudo rfkill unblock bluetooth
 
 ### Wi-Fi ในเว็บขึ้น unavailable
 
-เป็นพฤติกรรมที่คาดไว้ เพราะ Docker image ชุดนี้ยังไม่ติดตั้ง `nmcli` หรือ host authorization ที่จำเป็นสำหรับ feature นี้
+เป็นพฤติกรรมที่คาดไว้เฉพาะกรณีที่ Docker image เก่า (ก่อนเพิ่ม `network-manager` package) หรือยังไม่ได้ rebuild image ด้วย `docker compose up -d --build`
+
+**วิธีแก้**: rebuild image ด้วยคำสั่ง:
+
+```bash
+cd ~/radio-server/Docker
+docker compose up -d --build
+```
+
+หลัง rebuild หน้า Wi‑Fi จะทำงานได้ปกติ ถ้ายังไม่ขึ้นให้ตรวจ:
+
+```bash
+docker compose exec piradio which nmcli
+docker compose exec piradio nmcli general status
+```
+
+หรือติดตั้ง Wi‑Fi fallback hotspot **บน host** (ไม่ใช่ใน container) ตามหัวข้อ 10
 
 ### กด Power Off แล้วไม่มีอะไรเกิดขึ้น
 

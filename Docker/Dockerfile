@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y bluez mpc \
+    && apt-get install --no-install-recommends -y bluez mpc network-manager sudo \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Docker/requirements.txt /tmp/requirements.txt

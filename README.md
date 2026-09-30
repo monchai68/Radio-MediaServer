@@ -129,7 +129,7 @@ service นี้ต้องรันบน host OS และไม่ใช่
 
 ## ข้อมูลที่บันทึก
 
-- `stations.json`: หมวดหมู่ สถานี รายการโปรด และ playback mode ล่าสุด
+- `stations.json`: ชื่อวิทยุ หมวดหมู่ สถานี รายการโปรด และ playback mode ล่าสุด
 - `audio_state.json`: สถานะ audio output ล่าสุด; จะถูกสร้างหลังมีการสลับ output
 
 สำรองสองไฟล์นี้ก่อนอัปเกรดเครื่องหรือย้ายไป Pi เครื่องใหม่
@@ -138,6 +138,7 @@ service นี้ต้องรันบน host OS และไม่ใช่
 
 | กลุ่ม | Endpoint |
 | --- | --- |
+| ตั้งค่าวิทยุ | `PUT /api/radio_name` |
 | สถานี/หมวดหมู่ | `GET /api/data`, `GET/POST /api/categories`, `GET/POST /api/stations` |
 | Playback | `GET /api/play/<id>`, `GET /api/pause`, `GET /api/resume`, `GET /api/stop`, `GET /api/status`, `GET /api/volume/<0-100>` |
 | Mode และ DLNA | `GET/PUT /api/mode`, `GET /api/dlna/servers`, `GET /api/dlna/browse`, `POST /api/dlna/play` |

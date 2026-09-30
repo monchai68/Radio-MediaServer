@@ -307,7 +307,8 @@ python app.py
 ## สถานะปัจจุบัน
 
 - สแกนหาและเชื่อมต่อ Wi-Fi ผ่านหน้าเว็บได้แล้ว (เฉพาะคลื่น 2.4GHz ตามข้อจำกัดฮาร์ดแวร์)
-- Hotspot fallback (`scripts/wifi-fallback.sh` + `.service`) เตรียมพร้อมสำหรับติดตั้งบน Pi แต่ยังไม่ได้ enable ใช้งานจริงบนเครื่อง (รอผู้ใช้ทดสอบและ enable ตามขั้นตอนที่ให้ไว้)
+- Hotspot fallback (`scripts/wifi-fallback.sh` + `.service`) ถูกแก้ไขแล้วรอบที่ 2 (v2026-10-01) — ตอนนี้เช็คอินเทอร์เน็ตจริงด้วย ping ก่อนเปิด hotspot และกัน hotspot วนซ้ำทุก boot
+- Hotspot fallback ถูก enable แล้วบนเครื่อง Pi จริง ถ้าใช้ Wi‑Fi อยู่ hotspot จะเปิดเฉพาะตอนบูตแล้วไม่เจอเครือข่ายจริง ๆ เท่านั้น; ถ้าต่อ ethernet และไม่ต้องการ hotspot เลย ให้ disable service ทิ้ง
 - ยืนยันแล้วว่า path การ deploy จริงบนเครื่องคือ `/home/monchai68/radio-server/` ควบคุมด้วย `radio.service`
 
 ## ข้อควรทราบ
@@ -317,6 +318,79 @@ python app.py
 - Hotspot fallback ใช้รหัสผ่าน default `piradio1234` — ควรเปลี่ยนก่อนใช้งานจริงเพื่อความปลอดภัย (แก้ในไฟล์ `scripts/wifi-fallback.sh`)
 - Pi Zero 2 W รองรับ Wi-Fi 2.4GHz เท่านั้น ไม่ต้องพยายามหาเครือข่าย 5GHz
 
+---
+
+# Fixed: Wi-Fi Fallback Hotspot Activated Falsely Every Boot (Bare-metal)
+
+วันที่ปรับปรุง: 2026-10-01
+
+## อาการ (Symptom)
+
+เปิดเครื่องมารับฟัง Internet Radio ต่อจากครั้งก่อนได้ปกติ สักพัก Network หลุด แล้วหน้าเว็บขึ้นข้อความ "Setup hotspot active" ให้ตั้งค่า Wi‑Fi ใหม่ทุกครั้ง
+
+## สาเหตุ (Root Cause)
+
+`scripts/wifi-fallback.sh` (รันผ่าน `wifi-fallback.service`) ตรวจเฉพาะว่า **Wi‑Fi interface มี active connection** หรือไม่ ถ้าไม่เจอก็เปิด hotspot `PiRadio-Setup` ทันที แต่:
+
+1. Pi Zero 2 W ใช้ Wi‑Fi เป็นหลัก และอาจเชื่อมต่อช้ากว่า 60 วินาที (โดยเฉพาะกับ router ที่ DHCP ช้า)
+2. สคริปต์เดิมไม่สนใจ **ethernet** — ถ้าต่อสาย LAN อยู่ก็ยังเปิด hotspot
+3. สคริปต์เดิมไม่สนใจว่า **อินเทอร์เน็ตใช้งานได้จริงหรือไม่** (Layer 3 reachability)
+4. ไม่มี state tracking — เมื่อเปิด hotspot แล้วจะตัด Wi‑Fi จริงทิ้งทันที (`nmcli connection up PiRadio-Setup`)
+
+## การแก้ไข (Changes)
+
+### `scripts/wifi-fallback.sh` (v2026-10-01)
+- **เพิ่ม `has_any_interface_internet()`**: ping `8.8.8.8` / `1.1.1.1` ก่อนเปิด hotspot เสมอ
+- **เพิ่ม `is_ethernet_up()`**: ถ้า ethernet ต่ออยู่และมี internet ก็ไม่เปิด hotspot
+- **เพิ่ม `CONNECTED_STAMP` (state stamp)**: เมื่อ internet ถึงได้ครั้งหนึ่งใน boot นี้ จะไม่เปิด hotspot อีก
+- **เพิ่ม `WAIT_SECONDS` จาก 60 → 90** ให้เวลามากขึ้น
+- **เพิ่ม retries จาก 3 → 5** ในการลองดึง saved profiles ขึ้น
+- **Phase 2.5**: เช็ค internet อีกครั้งก่อนเปิด hotspot เผื่อหลุดมาได้ระหว่าง retry
+- **เปลี่ยน core logic**: จาก "เช็คเฉพาะ Wi‑Fi connected" → "เช็คว่า internet ถึงจริง"
+
+| รายละเอียด | ก่อนแก้ | หลังแก้ |
+|---|---|---|
+| เกณฑ์ตัดสิน | Wi‑Fi `activated`? | ping ถึง `8.8.8.8` / `1.1.1.1` |
+| Ethernet | ไม่สนใจ | เช็คและกัน hotspot |
+| รอนานสุด | 60 วินาที | 90 วินาที |
+| Retry saved profiles | 3 ครั้ง | 5 ครั้ง |
+| State stamp | ไม่มี | `/var/run/wifi-fallback-online.stamp` |
+
+### `scripts/wifi-fallback.service`
+- เพิ่ม `TimeoutStartSec=180` (แต่เดิม default 90s อาจไม่พอ)
+- เพิ่ม `StandardOutput=journal+console` ดู log ง่ายขึ้น
+
+## วิธี deploy (อัปเดตบน Pi)
+
+```bash
+# 1. ส่งไฟล์ใหม่ไปยัง Pi (จาก Windows PowerShell หรือ SCP)
+scp scripts/wifi-fallback.sh <pi-user>@piradio.local:~/radio-server/scripts/wifi-fallback.sh
+scp scripts/wifi-fallback.service <pi-user>@piradio.local:~/radio-server/scripts/wifi-fallback.service
+
+# 2. SSH เข้า Pi แล้วติดตั้ง
+ssh <pi-user>@piradio.local
+
+sudo install -m 755 ~/radio-server/scripts/wifi-fallback.sh /usr/local/bin/wifi-fallback.sh
+sudo install -m 644 ~/radio-server/scripts/wifi-fallback.service /etc/systemd/system/wifi-fallback.service
+sudo systemctl daemon-reload
+sudo systemctl disable wifi-fallback.service   # ถ้าเปิดอยู่เดิม
+sudo systemctl enable --now wifi-fallback.service
+
+# 3. ตรวจสอบ log
+sudo journalctl -u wifi-fallback.service -n 100 --no-pager
+```
+
+## ข้อแนะนำเพิ่มเติม
+
+- ถ้าเครื่องใช้ **ethernet เป็นหลัก** (ต่อสาย LAN) และไม่ต้องการ hotspot เลย ให้ disable service ทิ้ง:
+  ```bash
+  sudo systemctl disable --now wifi-fallback.service
+  ```
+- ถ้า Wi‑Fi ยังขึ้นช้าเป็นปกติ ให้ลองตรวจสอบด้วย:
+  ```bash
+  nmcli device wifi list
+  ```
+  ถ้าเจอ SSID แต่เชื่อมต่อช้า อาจต้องตั้ง `connection.auth-retries` หรือแก้ `wpa_supplicant` config
 ---
 
 # Modified: Resume DLNA Directory and Track Metadata

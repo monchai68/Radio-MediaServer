@@ -89,13 +89,25 @@ http://<IP_ของ_Raspberry_Pi>:5000
 2. **ข้อจำกัดเรื่องสิทธิ์และการแยกส่วนของ Docker (Container Isolation):** โดยค่าเริ่มต้น Container จะถูกจำกัด Linux capabilities (ไม่มี `CAP_SYS_BOOT`) และไม่มี systemd ของ Host ทำให้ process ภายใน Container ไม่มีสิทธิ์ส่งสัญญาณปิดเครื่องจริงของ Host ได้
 
 ### วิธีการแก้ไข / ข้อแนะนำ (Workaround & Solutions)
-* **การปิดเครื่องในปัจจุบัน:** ให้สั่งปิดเครื่องผ่าน SSH บนตัวเครื่อง Host โดยตรง:
+* **การด้านกระดาษโน้ต - ปัญหาสำหรับ Line Endings (CRLF / `\r`):**
+  เมื่อดาวน์โหลดหรือแก้ไขสคริปต์บนระบบปฏิบัติการ Windows แล้วนำไปเปิดระบบบลูทูธหรือระบบ Wi-Fi หมุนเวียนบนบอร์ด Linux เช่น `/usr/local/sbin/piradio-update-mpd-bluetooth` หรือ `/usr/local/bin/wifi-fallback.sh` มักจะเกิดพาร์ทแปลกปลอมตัวอักษรแฝง `\r` ทำให้รันคำสั่งเฟล ให้กู้และทำความสะอาดด้วยการรันคำสั่ง:
   ```bash
-  sudo poweroff
-
-  แนวทางแก้ที่แผนแนะนำไว้ (ยังไม่ได้ทำ)
-
-ต้องทำ helper ฝั่ง host (นอก container) เช่น สคริปต์/systemd service เล็กๆ บน Pi 3B ที่คอยฟังคำสั่งปิดเครื่อง (ผ่าน socket file, D-Bus หรือไฟล์ที่คอย watch) แล้วให้ container เรียกไปหา helper ตัวนี้แทนที่จะสั่ง poweroff ตรงๆ — วิธีนี้ปลอดภัยกว่าการเปิด privileged: true ให้ container ซึ่งแผนบอกไว้ชัดว่าไม่ควรทำเพราะให้สิทธิ์เกินจำเป็นมากครับ
+  sudo sed -i 's/\r$//' /usr/local/sbin/piradio-update-mpd-bluetooth
+  sudo sed -i 's/\r$//' /usr/local/bin/wifi-fallback.sh
+  sudo systemctl daemon-reload
+  sudo systemctl restart wifi-fallback.service
+  ```
+* **การเชื่อมสัญญาณเมื่อบอร์ดหลุดวงเครือข่ายแล้วปล่อย Host WiFi `PiRadio-Setup`:**
+  1. ล็อกอินเข้า Wi-Fi คลื่น `PiRadio-Setup` ด้วยคีย์รหัสผ่าน **`piradio1234`**
+  2. เข้าเว็บเบราว์เซอร์ไปที่โดเมนหลัก **`http://10.42.0.1`** (หรือลองผ่าน mDNS **`http://raspberrypi.local`**)
+  3. กดที่เครื่องฟันเฟือง **⚙️ Settings** -> เลือก **📶 Wi-Fi** แล้วป้อนเชื่อมกับสแกนเนอร์ Wi-Fi บ้าน วงความถี่ 2.4GHz
+  4. เมื่อเชื่อมต่อแล้ว ให้เชื่อมโครงข่ายมือถือคุณเข้าที่เดิม แล้วสั่งรันหน้าเว็บหลักได้ผ่านโดเมน **`http://raspberrypi.local`** (หรือ IP หลักของบอร์ด) ได้ทันทีครับ!
+* **การเปิดเล่นมีเดียเซิร์ฟเวอร์ (DLNA) บูตแล้วเล่นได้เพลงเดียวค้าง:**
+  - ตัวแอปพลิเคชันได้รับการปรับแต่งแกนทำงานใน `restore_last_audio_output()` ให้กลับไปปะคอสร้างดึงคิวของเพลงทั้งอัลบั้มมาใส่ MPD ใหม่ตั้งแต่ต้นให้แล้ว เพียงส่งไฟล์ `app.py` หลังอัปเดตและสั่งรีสตาร์ตระบบเซอร์วิส:
+    ```bash
+    sudo systemctl restart radio.service
+    ```
+    บอร์ดก็จะกู้คืนสตรีมทั้งโฟลเดอร์ทำงานได้เหมือนเพิ่งกดจองบนเว็บแล้วครับ!
 
 ---
 
@@ -134,12 +146,91 @@ aplay -l
 2. ดำเนินการสั่งปิดการทำงานตัวที่ไม่ได้เชื่อมอยู่จริงและเปิดตัวหลักให้รันทำงาน (สมมติให้ USB Headphone เป็นเลข 1 และ Bluetooth Speaker เป็นเลข 2):
    ```bash
    mpc enable 1
-   mpc disable 2
-   ```
-3. สั่งลองให้ MPD เล่นเสียงสตรีมใหม่อีกครั้ง:
+---
+
+## 7. ปัญหา: เปิดเครื่องมาเล่นเพลงต่อได้ แล้ว network หลุดให้ตั้งค่า Wi‑Fi ใหม่ทุกครั้ง (Bare-metal)
+
+### อาการที่พบ (Symptom)
+
+* เปิดเครื่อง Raspberry Pi (ไม่ใช้ Docker) Internet Radio กลับมาเล่นสถานีเดิมต่อจากครั้งก่อนได้ปกติ
+* เล่นไปสักพัก (ประมาณ 1-2 นาที) network หลุด หน้าเว็บขึ้นข้อความ "Setup hotspot active — connect a phone/computer to the Pi's own Wi-Fi to configure"
+* ต้องเข้าไปหน้า Wi‑Fi Settings เพื่อ Connect ใหม่ทุกครั้งหลังบูต
+
+### สาเหตุของปัญหา (Root Causes)
+
+1. **`wifi-fallback.service` เปิด hotspot `PiRadio-Setup` แทน:** มีการติดตั้ง systemd service `wifi-fallback.service` ซึ่งรัน `scripts/wifi-fallback.sh` หลังบูต โดยสคริปต์จะรอให้ Wi‑Fi เชื่อมต่อภายในเวลาที่กำหนด (`WAIT_SECONDS`) หากไม่ทันจะรัน `nmcli connection up PiRadio-Setup` ซึ่ง **ตัด Wi‑Fi จริงทิ้งและเปลี่ยนการ์ดเป็นโหมด AP** ทันที
+2. **เกณฑ์ตัดสินเดิมใช้แค่ Wi‑Fi interface state:** สคริปต์รุ่นเก่าดูแค่ว่า `wlan0` มี active connection ที่ไม่ใช่ hotspot หรือไม่ — ไม่สนใจ ethernet หรือการเข้าถึงอินเทอร์เน็ตจริง (Layer 3)
+3. **Pi Zero 2 W เชื่อมต่อ Wi‑Fi ช้า:** โดยเฉพาะกับ router ที่ DHCP ช้า หรือสัญญาณอ่อน อาจต้องใช้เวลา 60-90 วินาทีจึงจะได้ IP
+4. **MPD เล่นเพลงจาก buffer ต่อได้ช่วงแรก:** ทำให้ดูเหมือน network ปกติ ก่อนที่ hotspot จะตัด Wi‑Fi ทิ้ง
+
+### วิธีการแก้ไข (Solutions)
+
+#### วิธีที่ 1: อัปเดตสคริปต์ `wifi-fallback.sh` และ restart service (แนะนำ)
+
+สคริปต์รุ่นล่าสุด (v2026-10-01) มีการปรับปรุงดังนี้:
+- ใช้ **ping 8.8.8.8 / 1.1.1.1** เพื่อเช็คอินเทอร์เน็ตจริงก่อนเปิด hotspot
+- เพิ่มการเช็ค **ethernet** — ถ้าต่อ LAN อยู่และอินเทอร์เน็ตถึง จะไม่เปิด hotspot
+- เพิ่ม **state stamp** (`/var/run/wifi-fallback-online.stamp`) — ถ้าอินเทอร์เน็ตเคยถึงใน boot นี้แล้ว จะไม่เปิด hotspot อีก
+- เพิ่มเวลารอ **60 → 90 วินาที**
+- เพิ่ม retries **3 → 5** ครั้ง
+
+**ขั้นตอนอัปเดต:**
+```bash
+# ส่งไฟล์ใหม่ไป Pi แล้วติดตั้ง
+sudo install -m 755 ~/radio-server/scripts/wifi-fallback.sh /usr/local/bin/wifi-fallback.sh
+sudo install -m 644 ~/radio-server/scripts/wifi-fallback.service /etc/systemd/system/wifi-fallback.service
+sudo systemctl daemon-reload
+sudo systemctl disable wifi-fallback.service   # disable ของเก่าที่กำลังรัน
+sudo systemctl enable --now wifi-fallback.service
+
+# ตรวจสอบ log
+sudo journalctl -u wifi-fallback.service -n 100 --no-pager
+```
+
+หลัง reboot ควรเห็น log ขึ้น `"Internet reachable (via wifi or ethernet) after ~XXs"` หรือ `"Internet is already reachable"` แสดงว่าไม่หลุด hotspot
+
+#### วิธีที่ 2: disable `wifi-fallback.service` ถ้าไม่ต้องการ hotspot เลย
+
+ถ้าเครื่องต่อ ethernet เป็นหลัก หรือตั้งค่า Wi‑Fi จนเสถียรแล้ว และไม่ต้องการโหมด setup hotspot:
+
+```bash
+sudo systemctl disable --now wifi-fallback.service
+```
+
+#### วิธีที่ 3: ตรวจสอบและซ่อมโปรไฟล์ Wi‑Fi ที่เสีย
+
+บางครั้งโปรไฟล์ Wi‑Fi ใน NetworkManager เสีย (key-mgmt หาย) ทำให้เชื่อมต่ออัตโนมัติไม่สำเร็จ:
+
+```bash
+# ดูโปรไฟล์ทั้งหมด
+nmcli connection show
+
+# ถ้าโปรไฟล์มีปัญหาหรือขึ้น Error: 802-11-wireless-security.key-mgmt: property is missing
+# ให้ลบแล้วสร้างใหม่
+sudo nmcli connection delete "<ชื่อ SSID>"
+
+# สร้างใหม่
+sudo nmcli device wifi connect "<SSID>" password "<รหัสผ่าน>"
+```
+
+### วิธีการตรวจสอบว่าหายหรือยัง (How to Verify)
+
+1. Reboot Pi: `sudo reboot`
+2. รอประมาณ 2 นาที
+3. SSH เข้า Pi แล้วเช็ค:
    ```bash
-   mpc play
+   sudo systemctl status wifi-fallback.service --no-pager
+   # ต้องเห็น status: exited (success) และไม่มีข้อความ "Starting setup hotspot"
+
+   sudo journalctl -u wifi-fallback.service -n 50 --no-pager
+   # ต้องไม่บรรทัด "Hotspot ... is now active"
+
+   ping -c 3 8.8.8.8
+   # ต้องตอบกลับ normal
+
+   ls -la /var/run/wifi-fallback-online.stamp 2>/dev/null && echo "Online stamp exists ✓"
    ```
+4. เปิดหน้าเว็บ: ต้องเห็นสถานะปกติ (connected to <SSID>) ไม่ใช่ "Setup hotspot active"
 
 #### ขั้นตอนที่ 3: ตรวจค่าและแก้ไขไฟล์ตั้งค่าอุปกรณ์ `/etc/mpd.conf`
 หากชื่อทางการ์ดเสียงที่ตรวจพบในระบบแตกต่างจากเดิม (เช่น เปลี่ยนชิปอุปกรณ์เสียบเสียงตัวใหม่):

@@ -4,10 +4,10 @@
 
 ## ขอบเขตของ Phase 1
 
-- ใช้งานได้: Flask UI, Radio, DLNA, MPD/MPC, Bluetooth control, การเก็บ `stations.json` และ `audio_state.json`
-- ยังไม่เปิดใช้: Wi-Fi setup และ Power Off จากใน container
+- ใช้งานได้: Flask UI, Radio, DLNA, MPD/MPC, Bluetooth control, Wi‑Fi scan/connect (ใน container), การเก็บ `stations.json` และ `audio_state.json`
+- ยังไม่เปิดใช้: Power Off จากใน container (ใช้ host helper แทน)
 
-Bluetooth control ใช้ `bluetoothctl` ใน container และ bind-mount host system D-Bus socket. BlueZ, Bluetooth audio backend และ MPD output ต้องตั้งค่าบน host ตาม [instruction.md](instruction.md). Wi-Fi และ Power Off จะรายงาน unavailable เพราะ image ยังไม่ติดตั้ง `nmcli` หรือ `sudo` และไม่มี host authorization ที่จำเป็น
+Bluetooth control ใช้ `bluetoothctl` ใน container และ bind-mount host system D-Bus socket. BlueZ, Bluetooth audio backend และ MPD output ต้องตั้งค่าบน host ตาม [installation-docker.md](installation-docker.md). Power Off จะรายงาน unavailable ถ้ายังไม่ได้ติดตั้ง host helper (ดูหัวข้อ 9 ของ installation-docker.md)
 
 ## เริ่มใช้งานบน Raspberry Pi
 

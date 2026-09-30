@@ -6,6 +6,7 @@ let editingStationId = null;
 let isManageCategoriesOpen = false;
 let isManageStationsOpen = false;
 let playerState = "stopped";
+let radioName = "Internet Radio";
 
 let playbackMode = "radio";
 let dlnaServers = [];
@@ -751,6 +752,15 @@ function syncStatus() {
     fetch("/api/status")
         .then((r) => r.json())
         .then((data) => {
+            if (data.radio_name) {
+                radioName = data.radio_name;
+                const headerEl = document.getElementById("appRadioName");
+                if (headerEl) {
+                    headerEl.textContent = "🎵 " + radioName;
+                }
+                document.title = radioName;
+            }
+
             if (data.mode && data.mode !== playbackMode) {
                 setMode(data.mode, false);
             }
@@ -1495,5 +1505,53 @@ function submitWifiConnect() {
         })
         .catch(() => {
             alert("Connect failed: request error");
+        });
+}
+
+function openRenameRadioModal() {
+    closeSettingsModal();
+    const input = document.getElementById("renameRadioInput");
+    if (input) {
+        input.value = radioName;
+    }
+    document.getElementById("renameRadioModal").classList.remove("hidden");
+}
+
+function closeRenameRadioModal() {
+    document.getElementById("renameRadioModal").classList.add("hidden");
+}
+
+function saveRadioName() {
+    const input = document.getElementById("renameRadioInput");
+    if (!input) {
+        return;
+    }
+    const name = input.value.trim();
+    if (!name) {
+        alert("Please enter a radio name");
+        return;
+    }
+
+    fetch("/api/radio_name", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name })
+    })
+        .then((r) => r.json())
+        .then((data) => {
+            if (data.name) {
+                radioName = data.name;
+                const headerEl = document.getElementById("appRadioName");
+                if (headerEl) {
+                    headerEl.textContent = "🎵 " + radioName;
+                }
+                document.title = radioName;
+                closeRenameRadioModal();
+            } else if (data.error) {
+                alert("Failed to save: " + data.error);
+            }
+        })
+        .catch(() => {
+            alert("Failed to save radio name: request failed");
         });
 }

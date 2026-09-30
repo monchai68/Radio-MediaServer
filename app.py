@@ -7,6 +7,8 @@ import socket
 import time
 import threading
 import xml.etree.ElementTree as ET
+import logging
+import sys
 
 try:
     import upnpclient
@@ -20,6 +22,16 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, "templates"),
     static_folder=os.path.join(BASE_DIR, "static")
 )
+
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
 
 STATIONS_PATH = os.path.join(BASE_DIR, "stations.json")
 
@@ -113,6 +125,7 @@ def load_data_store():
     stations = raw.get("stations", []) if isinstance(raw, dict) else []
     playback_mode = raw.get("playback_mode", "radio") if isinstance(raw, dict) else "radio"
     last_dlna_directory = raw.get("last_dlna_directory") if isinstance(raw, dict) else None
+    radio_name = raw.get("radio_name", "Internet Radio") if isinstance(raw, dict) else "Internet Radio"
     needs_save = False
 
     if playback_mode not in VALID_PLAYBACK_MODES:
@@ -197,7 +210,8 @@ def load_data_store():
         "categories": categories,
         "stations": normalized_stations,
         "playback_mode": playback_mode,
-        "last_dlna_directory": last_dlna_directory
+        "last_dlna_directory": last_dlna_directory,
+        "radio_name": radio_name
     }
 
     if needs_save:
@@ -232,6 +246,14 @@ def get_playback_mode():
 
 def set_playback_mode(mode):
     data_store["playback_mode"] = mode
+
+
+def get_radio_name():
+    return data_store.get("radio_name", "Internet Radio")
+
+
+def set_radio_name(name):
+    data_store["radio_name"] = name
 
 
 def get_last_dlna_directory():
@@ -837,10 +859,18 @@ WIFI_IFACE = "wlan0"
 
 
 def run_nmcli(args, timeout=15):
-    """nmcli connection management needs root; matches the sudo pattern used by /api/poweroff."""
+    """nmcli connection management needs root; matches the sudo pattern used by /api/poweroff.
+    
+    In Docker mode (root user, host-network + D-Bus), skip sudo and call nmcli directly.
+    In bare-metal mode, use sudo to match the sudoers NOPASSWD rule.
+    """
     try:
+        if DEPLOYMENT_MODE == "docker":
+            cmd = ["nmcli"] + args
+        else:
+            cmd = ["sudo", "nmcli"] + args
         return subprocess.run(
-            ["sudo", "nmcli"] + args,
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout
@@ -854,8 +884,10 @@ def unescape_nmcli_field(value):
 
 
 def get_wifi_status():
+    logger.debug("get_wifi_status: querying active connections...")
     result = run_nmcli(["-t", "-f", "TYPE,STATE,DEVICE,CONNECTION", "connection", "show", "--active"])
     if result is None:
+        logger.warning("get_wifi_status: nmcli unavailable")
         return {"available": False, "connected": False, "ssid": None, "ip": None, "hotspot_active": False}
 
     connected = False
@@ -873,10 +905,12 @@ def get_wifi_status():
 
         if connection_name == WIFI_HOTSPOT_CONNECTION_NAME:
             hotspot_active = True
+            logger.debug("get_wifi_status: hotspot is active")
             continue
 
         connected = True
         ssid = connection_name
+        logger.debug("get_wifi_status: connected to SSID '%s' via '%s'", ssid, connection_name)
 
     ip_address = None
     if connected:
@@ -884,20 +918,25 @@ def get_wifi_status():
         if ip_result and ip_result.stdout:
             first_line = ip_result.stdout.splitlines()[0] if ip_result.stdout.splitlines() else ""
             ip_address = unescape_nmcli_field(first_line.split(":", 1)[-1]).split("/")[0] or None
+            logger.debug("get_wifi_status: IP address = %s", ip_address)
 
-    return {
+    status = {
         "available": True,
         "connected": connected,
         "ssid": ssid,
         "ip": ip_address,
         "hotspot_active": hotspot_active
     }
+    logger.info("get_wifi_status: %s", status)
+    return status
 
 
 def scan_wifi_networks():
+    logger.debug("scan_wifi_networks: starting rescan...")
     run_nmcli(["device", "wifi", "rescan"], timeout=10)
     result = run_nmcli(["-t", "-f", "SSID,SIGNAL,SECURITY,IN-USE", "device", "wifi", "list"], timeout=15)
     if result is None:
+        logger.warning("scan_wifi_networks: nmcli unavailable")
         return None
 
     saved_result = run_nmcli(["-t", "-f", "NAME,TYPE", "connection", "show"])
@@ -931,14 +970,26 @@ def scan_wifi_networks():
         })
 
     networks.sort(key=lambda n: n["signal"], reverse=True)
+    logger.info("scan_wifi_networks: found %d networks", len(networks))
+    logger.debug("scan_wifi_networks: saved profiles = %s", sorted(saved_ssids))
     return networks
 
 
 def stop_wifi_hotspot():
-    run_nmcli(["connection", "down", WIFI_HOTSPOT_CONNECTION_NAME], timeout=10)
+    """Stop the PiRadio-Setup hotspot if it is active. Safe to call even if not active."""
+    logger.info("Stopping hotspot '%s' (if active)...", WIFI_HOTSPOT_CONNECTION_NAME)
+    result = run_nmcli(["connection", "down", WIFI_HOTSPOT_CONNECTION_NAME], timeout=10)
+    if result is None:
+        logger.warning("hotspot stop: nmcli unavailable or timed out")
+    elif result.returncode != 0:
+        # Non-zero is often "connection not active" — not an error worth logging loudly
+        logger.debug("hotspot stop: nmcli returned %d (likely already down)", result.returncode)
+    else:
+        logger.info("Hotspot '%s' stopped.", WIFI_HOTSPOT_CONNECTION_NAME)
 
 
 def connect_wifi_network(ssid, password):
+    logger.info("Connecting to Wi-Fi SSID: '%s' (password len=%d)", ssid, len(password) if password else 0)
     stop_wifi_hotspot()
 
     args = ["device", "wifi", "connect", ssid]
@@ -947,17 +998,37 @@ def connect_wifi_network(ssid, password):
 
     result = run_nmcli(args, timeout=30)
     if result is None:
+        logger.error("connect: nmcli timed out or unavailable for SSID '%s'", ssid)
         return False, "nmcli timed out or unavailable"
 
     if result.returncode != 0:
-        return False, (result.stderr or result.stdout or "failed to connect").strip()
+        err_msg = (result.stderr or result.stdout or "failed to connect").strip()
+        logger.error("connect: nmcli failed for SSID '%s' (rc=%d): %s", ssid, result.returncode, err_msg)
+        return False, err_msg
+
+    # Connection succeeded — explicitly set autoconnect=yes and enable it
+    logger.info("connect: successfully connected to '%s'. Ensuring autoconnect=yes...", ssid)
+    autoconnect_result = run_nmcli(["connection", "modify", ssid, "autoconnect", "yes"], timeout=10)
+    if autoconnect_result and autoconnect_result.returncode == 0:
+        logger.info("connect: autoconnect=yes set on connection '%s'", ssid)
+    else:
+        logger.warning("connect: could not set autoconnect=yes on '%s' (profile name may differ)", ssid)
+
+    # Also ensure the connection is enabled (not manually disabled)
+    run_nmcli(["connection", "modify", ssid, "connection.autoconnect", "yes"], timeout=10)
 
     return True, (result.stdout or "").strip()
 
 
 def forget_wifi_network(ssid):
+    logger.info("forget_wifi_network: deleting connection profile '%s'", ssid)
     result = run_nmcli(["connection", "delete", ssid], timeout=10)
-    return result is not None and result.returncode == 0
+    if result is not None and result.returncode == 0:
+        logger.info("forget_wifi_network: profile '%s' deleted", ssid)
+        return True
+    else:
+        logger.warning("forget_wifi_network: failed to delete profile '%s'", ssid)
+        return False
 
 
 def parse_status_output(raw_status):
@@ -1063,6 +1134,22 @@ def update_mode():
 
     return {
         "mode": mode
+    }
+
+
+@app.route("/api/radio_name", methods=["PUT"])
+def update_radio_name():
+    payload = request.get_json(silent=True) or {}
+    name = (payload.get("name") or "").strip()
+
+    if not name:
+        return {"error": "name is required"}, 400
+
+    set_radio_name(name)
+    save_data_store()
+
+    return {
+        "name": name
     }
 
 
@@ -1661,6 +1748,7 @@ def stop():
 def status():
     mode = get_playback_mode()
     available = mpc_available()
+    radio_name = get_radio_name()
 
     if not available:
         return {
@@ -1671,7 +1759,8 @@ def status():
             "now_playing": None,
             "available": False,
             "mode": mode,
-            "current_url": ""
+            "current_url": "",
+            "radio_name": radio_name
         }
 
     try:
@@ -1692,7 +1781,8 @@ def status():
         "now_playing": current_track,
         "available": True,
         "mode": mode,
-        "current_url": current_url
+        "current_url": current_url,
+        "radio_name": radio_name
     }
 
 
@@ -1753,16 +1843,34 @@ def restore_last_audio_output():
     mode = get_playback_mode()
 
     if mode == "media_server":
-        directory = get_last_dlna_directory()
-        track_url = (directory or {}).get("track", {}).get("url")
+        directory = get_last_dlna_directory() or {}
+        server_id = directory.get("server_id")
+        container_id = directory.get("container_id")
+        track = directory.get("track") or {}
+        track_url = track.get("url")
+        track_id = track.get("id")
+
         if not track_url:
             return
+
+        # Try to build the original playlist queue with all the files from the DLNA folder
+        urls = []
+        if server_id and container_id and track_id:
+            # DLNA server might require discovery first. Force discovery once at boot.
+            discover_dlna_servers(force=True)
+            queue, queue_error = build_dlna_queue(server_id, container_id, track_id)
+            if not queue_error and queue:
+                urls = [t["url"] for t in queue if t.get("url")]
+
+        if not urls:
+            # Fallback to single track if DLNA server or container queue resolution failed
+            urls = [track_url]
 
         # MPD may auto-resume its own last queue at startup; retry so our choice wins the race.
         for attempt in range(3):
             ok_clear = mpc_cmd("clear")
-            ok_add = mpc_cmd(["add", track_url])
-            ok_play = mpc_cmd("play")
+            ok_add = mpc_cmd(["add"] + urls)
+            ok_play = mpc_cmd(["play", "1"])
             if ok_clear and ok_add and ok_play:
                 return
             time.sleep(2)

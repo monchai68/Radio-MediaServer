@@ -19,7 +19,7 @@ href="/static/style.css?v=20260817d">
 <div class="radio">
 
 <div class="app-header">
-<h1>🎵 Internet Radio</h1>
+<h1 id="appRadioName">🎵 Internet Radio</h1>
 <button id="settingsBtn" class="settings-btn" onclick="openSettingsModal()" aria-label="Settings" title="Settings">⚙️</button>
 </div>
 
@@ -60,10 +60,6 @@ NEXT ⏭
 
 <button class="control-btn power-btn" onclick="powerOff()">
 ⏻ Power Off
-</button>
-
-<button class="control-btn refresh-btn" onclick="refreshPage()">
-↻ REFRESH
 </button>
 </div>
 
@@ -179,9 +175,26 @@ onchange="setVolume(this.value)">
 <span>📶 Wi-Fi</span>
 <span class="settings-item-arrow">›</span>
 </button>
+<button class="settings-item" onclick="openRenameRadioModal()">
+<span>📝 Rename Radio</span>
+<span class="settings-item-arrow">›</span>
+</button>
 </div>
 <div class="modal-actions single">
 <button onclick="closeSettingsModal()">Close</button>
+</div>
+</div>
+</div>
+
+<div id="renameRadioModal" class="modal hidden">
+<div class="modal-card">
+<h4>Rename Radio</h4>
+<div class="manager-grid">
+<input id="renameRadioInput" type="text" placeholder="Enter radio name">
+</div>
+<div class="modal-actions">
+<button onclick="saveRadioName()">Save</button>
+<button onclick="closeRenameRadioModal()">Cancel</button>
 </div>
 </div>
 </div>
