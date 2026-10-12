@@ -603,3 +603,41 @@ docker compose up -d --build
 - การเช็คสถานะอิงจาก nmcli connection state (เชื่อมต่อกับ AP สำเร็จหรือไม่) ไม่ได้เช็ค internet reachability จริง (ไม่ ping ออกนอก) จึงไม่เปิด hotspot โดยไม่จำเป็นเวลาที่ ISP ล่มแต่ Wi-Fi ในบ้านยังเชื่อมต่อได้ปกติ
 - ยังไม่ได้ทดสอบบนฮาร์ดแวร์ Pi จริง (ทดสอบด้วย mock บนเครื่อง dev เท่านั้น) ควรทดสอบจริงโดยปิด Wi-Fi router หรือ disconnect Wi-Fi ขณะแอปทำงานอยู่ แล้วตรวจว่า hotspot เปิดขึ้นมาเองภายในเวลาที่ตั้งไว้
 
+---
+
+# Fixed: Wi-Fi Monitor เปิด Hotspot ผิดพลาดหลังฟังเพลงจบแค่ 1 เพลง (False Positive)
+
+วันที่แก้ไข: 2026-10-12
+
+## อาการ (Symptom)
+
+หลัง deploy `app.py` ที่มี `monitor_wifi_connectivity()` (จากหัวข้อก่อนหน้า) ขึ้นไปจริง ผู้ใช้รายงานว่าเล่นเพลงจบแค่ 1 เพลง Wi-Fi ก็หลุดและเห็น SSID `PiRadio-Setup` โผล่ขึ้นมาเอง ทั้งที่ Wi-Fi บ้านใช้งานได้ปกติ (ไม่ได้ปิด router หรือย้ายเครื่องออกนอกระยะ)
+
+## สาเหตุ (Root Cause)
+
+ค่า default เดิมของ `monitor_wifi_connectivity()` ไวเกินไป: แค่ `get_wifi_status()` รายงาน "ไม่เชื่อมต่อ" ติดต่อกัน 3 ครั้ง (interval 20 วินาที = รวม 60 วินาที) ก็เรียก `start_wifi_hotspot()` ทันที ซึ่งคำสั่ง `nmcli connection up PiRadio-Setup` **บังคับสลับการ์ด Wi-Fi (`wlan0`) เป็นโหมด AP ทันที ตัดการเชื่อมต่อจริงทิ้งโดยไม่สนใจว่ากำลังจะ reconnect เองได้อยู่แล้วหรือไม่**
+
+Pi Zero 2 W มีอาการสัญญาณ Wi-Fi หลุดสั้นๆ เป็นปกติอยู่แล้ว (เสาอากาศเล็ก, การ์ด Wi-Fi แชร์ bus เดียวกับ Bluetooth) การหลุดสั้นๆ แบบนี้เคยเป็นปัญหามาก่อนแล้วกับ `scripts/wifi-fallback.sh` ตอนบูต (ดูหัวข้อ "Fixed: Wi-Fi Fallback Hotspot Activated Falsely Every Boot" ด้านบน) — การเพิ่ม `monitor_wifi_connectivity()` เข้าไปโดยไม่มีกลไกผ่อนผันแบบเดียวกัน ทำให้ปัญหาคลาสเดียวกันกลับมาเกิดซ้ำ แต่คราวนี้เกิดได้ตลอดเวลาระหว่างใช้งานจริง ไม่ใช่แค่ตอนบูต
+
+## การแก้ไข (Changes)
+
+### `app.py`
+
+1. เพิ่มค่า default `WIFI_MONITOR_FAILURE_THRESHOLD` จาก `3` เป็น `9` (ปรับผ่าน `PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD` ได้เหมือนเดิม) — ต้องหลุดติดต่อกันนาน ~180 วินาทีก่อนเริ่มมีปฏิกิริยาใดๆ
+2. เพิ่มฟังก์ชันใหม่ `list_saved_wifi_profiles()` และ `try_reconnect_saved_wifi_profiles()` — mirror พฤติกรรม "ลอง reconnect saved profile ก่อน" ของ `scripts/wifi-fallback.sh` phase 2 โดยเรียก `nmcli connection up <profile>` ซึ่ง**ไม่ disruptive**เท่าการเปิด hotspot (ไม่บังคับสลับโหมด AP)
+3. `monitor_wifi_connectivity()` เปลี่ยนลำดับการ escalate เป็น 2 ขั้น: เมื่อครบ threshold จะ**ลอง `try_reconnect_saved_wifi_profiles()` ก่อน** ถ้าสำเร็จ reset ตัวนับแล้วไม่เปิด hotspot; เปิด `start_wifi_hotspot()` (ขั้นตอนสุดท้าย disruptive) ก็ต่อเมื่อลอง reconnect saved profile แล้วไม่สำเร็จเท่านั้น
+
+## ผลการทดสอบ
+
+ทดสอบด้วยการ mock `get_wifi_status`/`try_reconnect_saved_wifi_profiles`/`start_wifi_hotspot`/`time.sleep` บนเครื่อง dev:
+
+- **สถานการณ์หลุดสั้นๆ ที่ reconnect ได้เอง**: หลุดติดต่อกันครบ 9 ครั้ง → เรียก `try_reconnect_saved_wifi_profiles()` → สำเร็จ → **ไม่เรียก** `start_wifi_hotspot()` เลย
+- **สถานการณ์หลุดจริง (ไม่มี saved profile หรือ reconnect ไม่สำเร็จ)**: หลุดติดต่อกันครบ 9 ครั้ง → ลอง reconnect ไม่สำเร็จ → เรียก `start_wifi_hotspot()` ตามเดิม (ฟีเจอร์หลักยังทำงานถูกต้อง)
+- `python -m py_compile app.py` ผ่าน
+
+## ข้อควรทราบ
+
+- รวมเวลาทั้งหมดก่อนเปิด hotspot จริงตอนนี้คือ grace period (`150s` default) + threshold (`9 × 20s = 180s`) ≈ **5.5 นาที** จากเดิมที่ ~2.5 นาที ถ้าต้องการให้ไวขึ้นหรือช้าลงอีก ปรับผ่าน `PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD`/`PIRADIO_WIFI_MONITOR_INTERVAL` ได้โดยไม่ต้องแก้โค้ด
+- ยังไม่ได้ทดสอบบนฮาร์ดแวร์ Pi จริงหลังแก้ (ทดสอบด้วย mock เท่านั้น) — หลัง deploy แนะนำให้สังเกตอาการต่ออีกสักพักว่า hotspot ไม่โผล่มาเองขณะ Wi-Fi ปกติอีก และยังลองจำลองปิด router จริงเพื่อยืนยันว่า hotspot ยังเปิดได้เมื่อหลุดจริง
+- ต้อง deploy `app.py` ใหม่ (เหมือนเดิม: bare-metal copy แล้ว restart `radio.service`, Docker copy แล้ว rebuild image) เพื่อให้มีผล
+

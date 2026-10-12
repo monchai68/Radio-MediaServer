@@ -129,18 +129,18 @@ mpc outputs
 
    service นี้ต้องรันบน host OS และไม่ใช่ส่วนหนึ่งของ Flask process
 
-2. **ระหว่างใช้งาน** (`monitor_wifi_connectivity()` ใน `app.py`): background thread ที่ทำงานตลอดอายุของแอป คอยเช็คสถานะ Wi-Fi/ethernet เป็นระยะ ถ้าหลุดการเชื่อมต่อติดต่อกันหลายครั้ง (เช่น router รีสตาร์ท หรือย้ายอุปกรณ์ออกนอกระยะ) จะเปิด hotspot ให้อัตโนมัติโดยไม่ต้อง reboot เครื่อง ทำงานเหมือนกันทั้ง bare-metal และ Docker เพราะ `app.py` เป็นไฟล์เดียวที่ deploy ทั้งสองที่
+2. **ระหว่างใช้งาน** (`monitor_wifi_connectivity()` ใน `app.py`): background thread ที่ทำงานตลอดอายุของแอป คอยเช็คสถานะ Wi-Fi/ethernet เป็นระยะ ถ้าหลุดการเชื่อมต่อติดต่อกันนานพอ (เช่น router รีสตาร์ท หรือย้ายอุปกรณ์ออกนอกระยะ) จะ**ลอง reconnect saved Wi-Fi profile ก่อน** (ไม่ disruptive) แล้วเปิด hotspot ให้อัตโนมัติเฉพาะเมื่อ reconnect ไม่สำเร็จเท่านั้น โดยไม่ต้อง reboot เครื่อง ทำงานเหมือนกันทั้ง bare-metal และ Docker เพราะ `app.py` เป็นไฟล์เดียวที่ deploy ทั้งสองที่
 
-   ตั้งค่าได้ผ่าน environment variable (ไม่ตั้งจะใช้ค่า default):
+   ค่า default ตั้งใจให้ค่อนข้างอนุรักษ์นิยม (ใช้เวลารวม ~5.5 นาทีก่อนเปิด hotspot จริง) เพราะ Pi Zero 2 W มีอาการ Wi-Fi หลุดสั้นๆ เป็นปกติ การเปิด hotspot คือบังคับสลับการ์ด Wi-Fi เป็นโหมด AP ซึ่ง**ตัดการเชื่อมต่อจริงทิ้งทันที** จึงไม่ควรทำเร็วเกินไป ตั้งค่าได้ผ่าน environment variable (ไม่ตั้งจะใช้ค่า default):
 
    | ตัวแปร | ค่า default | ความหมาย |
    | --- | --- | --- |
    | `PIRADIO_HOTSPOT_PASSWORD` | `piradio1234` | รหัสผ่าน hotspot ที่ตั้งตอนสร้าง profile ครั้งแรกเท่านั้น (ไม่ overwrite รหัสผ่านที่เคยตั้งไว้แล้ว) |
    | `PIRADIO_WIFI_MONITOR_INTERVAL` | `20` วินาที | ความถี่ในการเช็คสถานะ |
    | `PIRADIO_WIFI_MONITOR_GRACE_PERIOD` | `150` วินาที | เวลารอหลังแอปเริ่มทำงานก่อนเริ่มตัดสินใจ เผื่อให้ `wifi-fallback.sh` ตอนบูตทำงานจบก่อน |
-   | `PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD` | `3` ครั้ง | จำนวนครั้งที่ต้องหลุดติดต่อกันก่อนเปิด hotspot |
+   | `PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD` | `9` ครั้ง | จำนวนครั้งที่ต้องหลุดติดต่อกันก่อนลอง reconnect saved profile แล้วค่อยเปิด hotspot ถ้ายังไม่สำเร็จ |
 
-   ดูรายละเอียดเพิ่มเติมใน [modified.md](modified.md) หัวข้อ "Runtime Wi-Fi Connectivity Monitor"
+   ดูรายละเอียดเพิ่มเติมใน [modified.md](modified.md) หัวข้อ "Runtime Wi-Fi Connectivity Monitor" และ "Fixed: Wi-Fi Monitor เปิด Hotspot ผิดพลาดหลังฟังเพลงจบแค่ 1 เพลง"
 
 ## ข้อมูลที่บันทึก
 

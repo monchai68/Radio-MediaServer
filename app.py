@@ -863,9 +863,13 @@ WIFI_HOTSPOT_PASSWORD = os.environ.get("PIRADIO_HOTSPOT_PASSWORD", "piradio1234"
 # Runtime Wi-Fi connectivity monitor (separate from the boot-time scripts/wifi-fallback.sh service):
 # watches for lost/never-established connections for the whole lifetime of the app and opens the
 # setup hotspot automatically, not just once right after boot.
+#
+# Defaults are deliberately conservative: switching wlan0 into AP mode is disruptive (it forcibly
+# tears down any real connection, even one that was about to recover on its own), so the monitor
+# must tolerate the brief Wi-Fi drops that are normal on a Pi Zero 2 W before it escalates.
 WIFI_MONITOR_INTERVAL_SECONDS = int(os.environ.get("PIRADIO_WIFI_MONITOR_INTERVAL", "20"))
 WIFI_MONITOR_GRACE_PERIOD_SECONDS = int(os.environ.get("PIRADIO_WIFI_MONITOR_GRACE_PERIOD", "150"))
-WIFI_MONITOR_FAILURE_THRESHOLD = int(os.environ.get("PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD", "3"))
+WIFI_MONITOR_FAILURE_THRESHOLD = int(os.environ.get("PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD", "9"))
 
 
 def run_nmcli(args, timeout=15):
@@ -1055,6 +1059,49 @@ def is_ethernet_connected():
     return False
 
 
+def list_saved_wifi_profiles():
+    """Names of saved 802-11-wireless connection profiles, excluding the setup hotspot itself."""
+    result = run_nmcli(["-t", "-f", "NAME,TYPE", "connection", "show"], timeout=10)
+    if result is None:
+        return []
+
+    profiles = []
+    for line in result.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 2 and parts[1] == "802-11-wireless":
+            name = unescape_nmcli_field(parts[0])
+            if name and name != WIFI_HOTSPOT_CONNECTION_NAME:
+                profiles.append(name)
+
+    return profiles
+
+
+def try_reconnect_saved_wifi_profiles():
+    """Try bringing a saved Wi-Fi profile back up before resorting to the setup hotspot.
+
+    Opening the hotspot forces wlan0 into AP mode, which tears down any real connection even if it
+    was about to recover on its own (e.g. after a brief signal drop or the router rebooting). Trying
+    `nmcli connection up <profile>` first is comparatively harmless and mirrors the saved-profile
+    retry phase in scripts/wifi-fallback.sh. Returns True if any saved profile reports connected.
+    """
+    profiles = list_saved_wifi_profiles()
+    if not profiles:
+        return False
+
+    for profile in profiles:
+        logger.info("wifi monitor: attempting to reconnect saved profile '%s'...", profile)
+        result = run_nmcli(["connection", "up", profile], timeout=20)
+        if result is None or result.returncode != 0:
+            continue
+
+        time.sleep(5)  # let DHCP settle before checking
+        if get_wifi_status().get("connected"):
+            logger.info("wifi monitor: reconnected via saved profile '%s'", profile)
+            return True
+
+    return False
+
+
 def start_wifi_hotspot():
     """Create (first time only) and activate the PiRadio-Setup AP so a phone/computer can join and
     configure Wi-Fi. Safe to call repeatedly; does nothing destructive if already active.
@@ -1111,6 +1158,12 @@ def monitor_wifi_connectivity():
     scripts/wifi-fallback.sh only runs once at boot. This monitor is the long-running counterpart:
     if the connection is ever lost afterwards (or was never established), it opens the setup hotspot
     automatically so the user can pick a network from the web UI, without needing a reboot.
+
+    Escalation is deliberately gradual: a sustained outage first triggers a gentle retry of saved
+    Wi-Fi profiles (try_reconnect_saved_wifi_profiles), and only switches wlan0 into the disruptive
+    AP/hotspot mode if that retry also fails. This avoids false positives from the brief Wi-Fi drops
+    that are normal on a Pi Zero 2 W, which would otherwise kill a connection that was about to
+    recover on its own.
     """
     logger.info(
         "wifi monitor: starting (interval=%ss, grace=%ss, failure threshold=%d)",
@@ -1140,8 +1193,12 @@ def monitor_wifi_connectivity():
                     consecutive_failures, WIFI_MONITOR_FAILURE_THRESHOLD
                 )
                 if consecutive_failures >= WIFI_MONITOR_FAILURE_THRESHOLD:
-                    start_wifi_hotspot()
-                    consecutive_failures = 0
+                    logger.warning("wifi monitor: trying saved Wi-Fi profile(s) before opening the setup hotspot...")
+                    if try_reconnect_saved_wifi_profiles():
+                        consecutive_failures = 0
+                    else:
+                        start_wifi_hotspot()
+                        consecutive_failures = 0
         except Exception:
             logger.exception("wifi monitor: unexpected error, will retry")
 
