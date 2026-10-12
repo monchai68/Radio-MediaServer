@@ -856,16 +856,6 @@ def bluetooth_disconnect_device(mac):
 
 WIFI_HOTSPOT_CONNECTION_NAME = "PiRadio-Setup"
 WIFI_IFACE = "wlan0"
-# Fallback default only used the first time the hotspot profile is ever created on this device;
-# change via env var to match scripts/wifi-fallback.sh's HOTSPOT_PASSWORD if that was customized.
-WIFI_HOTSPOT_PASSWORD = os.environ.get("PIRADIO_HOTSPOT_PASSWORD", "piradio1234")
-
-# Runtime Wi-Fi connectivity monitor (separate from the boot-time scripts/wifi-fallback.sh service):
-# watches for lost/never-established connections for the whole lifetime of the app and opens the
-# setup hotspot automatically, not just once right after boot.
-WIFI_MONITOR_INTERVAL_SECONDS = int(os.environ.get("PIRADIO_WIFI_MONITOR_INTERVAL", "20"))
-WIFI_MONITOR_GRACE_PERIOD_SECONDS = int(os.environ.get("PIRADIO_WIFI_MONITOR_GRACE_PERIOD", "150"))
-WIFI_MONITOR_FAILURE_THRESHOLD = int(os.environ.get("PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD", "3"))
 
 
 def run_nmcli(args, timeout=15):
@@ -1039,113 +1029,6 @@ def forget_wifi_network(ssid):
     else:
         logger.warning("forget_wifi_network: failed to delete profile '%s'", ssid)
         return False
-
-
-def is_ethernet_connected():
-    """True if a wired connection is active, so we don't open the Wi-Fi hotspot unnecessarily."""
-    result = run_nmcli(["-t", "-f", "TYPE,STATE", "connection", "show", "--active"], timeout=10)
-    if result is None:
-        return False
-
-    for line in result.stdout.splitlines():
-        parts = line.split(":")
-        if len(parts) >= 2 and parts[0] == "802-3-ethernet" and parts[1] == "activated":
-            return True
-
-    return False
-
-
-def start_wifi_hotspot():
-    """Create (first time only) and activate the PiRadio-Setup AP so a phone/computer can join and
-    configure Wi-Fi. Safe to call repeatedly; does nothing destructive if already active.
-
-    Mirrors the AP profile created by scripts/wifi-fallback.sh, but is only applied once at profile
-    creation time so a password already customized on the device (by that script or by an admin) is
-    never clobbered on later activations.
-    """
-    logger.warning("Starting Wi-Fi setup hotspot '%s' (connection lost or never established)...", WIFI_HOTSPOT_CONNECTION_NAME)
-
-    show_result = run_nmcli(["-t", "-f", "NAME", "connection", "show"], timeout=10)
-    if show_result is None:
-        logger.error("start_wifi_hotspot: nmcli unavailable")
-        return False
-
-    existing_names = {unescape_nmcli_field(name) for name in show_result.stdout.splitlines()}
-    if WIFI_HOTSPOT_CONNECTION_NAME not in existing_names:
-        logger.info("start_wifi_hotspot: creating hotspot connection profile '%s'", WIFI_HOTSPOT_CONNECTION_NAME)
-        add_result = run_nmcli([
-            "connection", "add", "type", "wifi", "ifname", WIFI_IFACE,
-            "con-name", WIFI_HOTSPOT_CONNECTION_NAME, "autoconnect", "no",
-            "ssid", WIFI_HOTSPOT_CONNECTION_NAME
-        ], timeout=15)
-        if add_result is None or add_result.returncode != 0:
-            logger.error("start_wifi_hotspot: failed to create hotspot profile")
-            return False
-
-        run_nmcli([
-            "connection", "modify", WIFI_HOTSPOT_CONNECTION_NAME,
-            "802-11-wireless.mode", "ap",
-            "802-11-wireless.band", "bg",
-            "ipv4.method", "shared",
-            "wifi-sec.key-mgmt", "wpa-psk",
-            "wifi-sec.psk", WIFI_HOTSPOT_PASSWORD
-        ], timeout=15)
-
-    result = run_nmcli(["connection", "up", WIFI_HOTSPOT_CONNECTION_NAME], timeout=20)
-    if result is None:
-        logger.error("start_wifi_hotspot: nmcli unavailable or timed out while activating hotspot")
-        return False
-
-    if result.returncode != 0:
-        err_msg = (result.stderr or result.stdout or "").strip()
-        logger.error("start_wifi_hotspot: failed to activate hotspot (rc=%d): %s", result.returncode, err_msg)
-        return False
-
-    logger.warning("Hotspot '%s' is now active. Connect to it to configure Wi-Fi.", WIFI_HOTSPOT_CONNECTION_NAME)
-    return True
-
-
-def monitor_wifi_connectivity():
-    """Continuously watch Wi-Fi/ethernet connectivity for the whole lifetime of the app.
-
-    scripts/wifi-fallback.sh only runs once at boot. This monitor is the long-running counterpart:
-    if the connection is ever lost afterwards (or was never established), it opens the setup hotspot
-    automatically so the user can pick a network from the web UI, without needing a reboot.
-    """
-    logger.info(
-        "wifi monitor: starting (interval=%ss, grace=%ss, failure threshold=%d)",
-        WIFI_MONITOR_INTERVAL_SECONDS, WIFI_MONITOR_GRACE_PERIOD_SECONDS, WIFI_MONITOR_FAILURE_THRESHOLD
-    )
-
-    # Give NetworkManager / the boot-time fallback script time to settle before judging connectivity.
-    time.sleep(WIFI_MONITOR_GRACE_PERIOD_SECONDS)
-
-    consecutive_failures = 0
-
-    while True:
-        try:
-            status = get_wifi_status()
-
-            if not status.get("available"):
-                pass  # nmcli isn't usable right now; nothing we can act on
-            elif status.get("hotspot_active"):
-                # Already in setup mode; wait for the user to connect and pick a network.
-                consecutive_failures = 0
-            elif status.get("connected") or is_ethernet_connected():
-                consecutive_failures = 0
-            else:
-                consecutive_failures += 1
-                logger.warning(
-                    "wifi monitor: no active network connection detected (%d/%d)",
-                    consecutive_failures, WIFI_MONITOR_FAILURE_THRESHOLD
-                )
-                if consecutive_failures >= WIFI_MONITOR_FAILURE_THRESHOLD:
-                    start_wifi_hotspot()
-                    consecutive_failures = 0
-        except Exception:
-            logger.exception("wifi monitor: unexpected error, will retry")
-
-        time.sleep(WIFI_MONITOR_INTERVAL_SECONDS)
 
 
 def parse_status_output(raw_status):
@@ -2013,7 +1896,6 @@ def restore_last_audio_output():
 
 if __name__ == "__main__":
     threading.Thread(target=restore_last_audio_output, daemon=True).start()
-    threading.Thread(target=monitor_wifi_connectivity, daemon=True).start()
     app.run(
         host="0.0.0.0",
         port=5000
