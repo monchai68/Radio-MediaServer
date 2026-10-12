@@ -543,3 +543,63 @@ docker compose up -d --build
 - ถ้าย้าย/เปลี่ยนชื่อ container หรือรัน container ด้วย user ที่ไม่ใช่ root ในอนาคต ต้องทบทวน permission ของ socket (`0600` root:root) ใหม่ เพราะตอนนี้ใช้ได้เพราะ container รันเป็น root (ไม่มี `USER` ใน `Docker/Dockerfile`)
 - ยังไม่ได้ทดสอบบนฮาร์ดแวร์ Pi 3B จริง (โค้ด compile ผ่านและ diagnostics ไม่มี error เท่านั้น) ต้องทดสอบตามขั้นตอนข้างบนก่อนถือว่าใช้งานได้จริง
 
+---
+
+# Modified: Runtime Wi-Fi Connectivity Monitor (เปิด Hotspot อัตโนมัติเมื่อหลุดการเชื่อมต่อ ไม่ใช่แค่ตอนบูต)
+
+วันที่ปรับปรุง: 2026-10-12
+
+## สรุป
+
+เดิม `scripts/wifi-fallback.sh` + `wifi-fallback.service` เป็น systemd `oneshot` ที่ทำงาน**แค่ครั้งเดียวตอนบูตเครื่อง** — ถ้า Wi-Fi เชื่อมต่อไม่สำเร็จภายในเวลาที่กำหนดจะเปิด hotspot `PiRadio-Setup` ให้ แต่ถ้า Wi-Fi หลุดระหว่างใช้งานอยู่ (เช่น router รีสตาร์ท, ย้ายอุปกรณ์ออกนอกระยะ) หลังจากสคริปต์นี้ทำงานจบไปแล้ว จะไม่มีอะไรเปิด hotspot ให้อีกจนกว่าจะ reboot เครื่องใหม่ทั้งเครื่อง
+
+เพิ่ม background thread ใน `app.py` ที่ทำงานตลอดอายุของแอป (ไม่ใช่แค่ตอนบูต) คอยตรวจสอบสถานะ Wi-Fi/ethernet เป็นระยะ ถ้าหลุดการเชื่อมต่อติดต่อกันหลายครั้ง จะเปิด hotspot ให้อัตโนมัติโดยไม่ต้อง reboot เครื่อง ใช้ได้ทั้ง bare-metal (Pi Zero 2 W) และ Docker (Pi 3B) เพราะ `app.py` เป็นไฟล์เดียวที่ deploy ทั้งสองที่
+
+## การเปลี่ยนแปลงในโค้ด
+
+### Backend: `app.py`
+
+- เพิ่มค่าคงที่ตั้งค่าได้ผ่าน environment variable (มีค่า default สมเหตุสมผลถ้าไม่ตั้ง):
+  - `PIRADIO_HOTSPOT_PASSWORD` (default `piradio1234`) — ใช้ตั้งรหัสผ่าน hotspot **เฉพาะตอนสร้าง profile ครั้งแรกเท่านั้น**
+  - `PIRADIO_WIFI_MONITOR_INTERVAL` (default `20` วินาที) — ความถี่ในการเช็คสถานะ
+  - `PIRADIO_WIFI_MONITOR_GRACE_PERIOD` (default `150` วินาที) — เวลารอหลังแอปเริ่มทำงานก่อนเริ่มตัดสินใจ เพื่อให้ `wifi-fallback.sh` ตอนบูตทำงานจบก่อน
+  - `PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD` (default `3` ครั้งติดต่อกัน) — จำนวนครั้งที่ต้องหลุดติดต่อกันก่อนเปิด hotspot (กันเปิดเพราะสัญญาณกระตุกชั่วคราว)
+- `is_ethernet_connected()`: เช็คว่ามีสาย LAN ต่ออยู่หรือไม่ ผ่าน `nmcli -t -f TYPE,STATE connection show --active`; ถ้ามีจะไม่เปิด hotspot
+- `start_wifi_hotspot()`: สร้าง (ถ้ายังไม่มี) และเปิดใช้ AP profile `PiRadio-Setup` ผ่าน `nmcli` ด้วยค่าตั้งค่าเดียวกับใน `scripts/wifi-fallback.sh` (`802-11-wireless.mode=ap`, `ipv4.method=shared`, `wifi-sec.key-mgmt=wpa-psk`) **ตั้งรหัสผ่านแค่ตอนสร้าง profile ครั้งแรกเท่านั้น** เพื่อไม่ไป overwrite รหัสผ่านที่เคยตั้งไว้แล้ว (ไม่ว่าจะโดยสคริปต์ boot หรือโดย admin ปรับเองด้วย `nmcli`)
+- `monitor_wifi_connectivity()`: loop ทำงานตลอดไป เรียก `get_wifi_status()` ทุก `PIRADIO_WIFI_MONITOR_INTERVAL` วินาที หลังจากรอ grace period ตอนเริ่มทำงาน ถ้า `connected` หรือมี ethernet หรือ hotspot เปิดอยู่แล้ว จะ reset ตัวนับ; ถ้าไม่มีการเชื่อมต่อใดๆ จะนับครั้งสะสม และเปิด hotspot อัตโนมัติเมื่อถึง threshold
+- เริ่ม thread นี้ใน `if __name__ == "__main__":` block (bare-metal) คู่กับ `restore_last_audio_output` เดิม
+
+### Docker: `Docker/wsgi.py`
+
+- import `monitor_wifi_connectivity` เพิ่มจาก `app` และเริ่ม thread คู่กับ `restore_last_audio_output` เช่นกัน เพราะ waitress import `app` module ตรงๆ ไม่ผ่าน `if __name__ == "__main__":` ของ `app.py`
+
+## ความสัมพันธ์กับ `scripts/wifi-fallback.sh` เดิม
+
+**ไม่ได้แทนที่กัน เป็นส่วนเสริมคนละช่วงเวลา:**
+
+- `wifi-fallback.sh` + `.service`: จัดการ "ช่วง ~90-130 วินาทีแรกหลังบูต" ก่อนที่ Flask app/MPD จะพร้อมทำงานด้วยซ้ำ (ยังคงต้องติดตั้งเหมือนเดิม ไม่มีการแก้ไขไฟล์นี้ในรอบนี้)
+- `monitor_wifi_connectivity()` ใน `app.py`: ทำงานต่อเนื่องตลอดเวลาหลังจากแอปเริ่มทำงานแล้ว ครอบคลุมกรณี Wi-Fi หลุดระหว่างใช้งานจริงที่สคริปต์ boot เดิมไม่ครอบคลุม
+
+## การ Deploy
+
+ต้องอัปเดตไฟล์ตาม deployment:
+
+- **Bare-metal (Pi Zero 2 W, `radio.service`)**: copy `app.py` แล้ว `sudo systemctl restart radio.service`
+- **Docker (Pi 3B)**: copy `app.py` และ `Docker/wsgi.py` แล้ว `docker compose -f Docker/compose.yaml up -d --build` (ต้อง rebuild image เพราะ `Dockerfile` ใช้ `COPY` ตอน build ไม่ได้ mount เป็น volume)
+
+ไม่ต้องติดตั้งหรือแก้ไข `scripts/wifi-fallback.sh`/`.service` เพิ่ม
+
+## การตรวจสอบ
+
+- `python -m py_compile app.py` และ `python -m py_compile Docker/wsgi.py` ผ่านทั้งคู่
+- ทดสอบ logic ด้วยการ mock `run_nmcli`/`get_wifi_status`/`time.sleep`:
+  - `start_wifi_hotspot()` ครั้งแรก (profile ยังไม่มี) เรียก `connection add` + `connection modify` (ตั้ง psk) + `connection up` ตามลำดับ
+  - `start_wifi_hotspot()` ครั้งถัดไป (profile มีอยู่แล้ว) เรียกแค่ `connection up` เท่านั้น ไม่แตะ psk ซ้ำ
+  - `monitor_wifi_connectivity()` เปิด hotspot พอดีหลังจากสถานะ "ไม่เชื่อมต่อ" ติดต่อกันครบ threshold และไม่เปิดซ้ำเมื่อ hotspot active อยู่แล้ว
+
+## ข้อควรทราบ
+
+- ถ้าเคยตั้ง `HOTSPOT_PASSWORD` ใน `scripts/wifi-fallback.sh` เป็นค่าที่ไม่ใช่ default และ profile `PiRadio-Setup` ถูกสร้างไปแล้วโดยสคริปต์นั้น `start_wifi_hotspot()` ในฝั่ง Python จะไม่เปลี่ยนรหัสผ่านที่ตั้งไว้ (เพราะเช็คว่า profile มีอยู่แล้วก่อนเรียก `connection modify`) — ตั้ง `PIRADIO_HOTSPOT_PASSWORD` ให้ตรงกันไว้ก็ต่อเมื่อยังไม่เคยมี profile นี้มาก่อนบนเครื่องนั้น
+- การเช็คสถานะอิงจาก nmcli connection state (เชื่อมต่อกับ AP สำเร็จหรือไม่) ไม่ได้เช็ค internet reachability จริง (ไม่ ping ออกนอก) จึงไม่เปิด hotspot โดยไม่จำเป็นเวลาที่ ISP ล่มแต่ Wi-Fi ในบ้านยังเชื่อมต่อได้ปกติ
+- ยังไม่ได้ทดสอบบนฮาร์ดแวร์ Pi จริง (ทดสอบด้วย mock บนเครื่อง dev เท่านั้น) ควรทดสอบจริงโดยปิด Wi-Fi router หรือ disconnect Wi-Fi ขณะแอปทำงานอยู่ แล้วตรวจว่า hotspot เปิดขึ้นมาเองภายในเวลาที่ตั้งไว้
+

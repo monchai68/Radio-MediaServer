@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Internet Radio</title>
+
+<link rel="stylesheet"
+href="/static/style.css?v=20260817d">
+
+</head>
+
+
+<body>
+
+<div class="radio">
+
+<div class="app-header">
+<h1 id="appRadioName">🎵 Internet Radio</h1>
+<button id="settingsBtn" class="settings-btn" onclick="openSettingsModal()" aria-label="Settings" title="Settings">⚙️</button>
+</div>
+
+<div class="mode-selector">
+<button id="modeRadioBtn" class="mode-btn active" onclick="setMode('radio')">📻 Radio</button>
+<button id="modeMediaBtn" class="mode-btn" onclick="setMode('media_server')">🎵 Media Server</button>
+</div>
+
+<div id="station">
+Loading...
+</div>
+
+<div id="statusText" class="status-text">
+Ready
+</div>
+
+<div class="now-playing">
+<div id="songTitle" class="now-line"><span class="now-label">Song:</span> <span id="songTitleValue" class="now-value">-</span></div>
+<div id="songArtist" class="now-line"><span class="now-label">Artist:</span> <span id="songArtistValue" class="now-value">-</span></div>
+</div>
+
+<div class="control-grid">
+<button id="playBtn" class="control-btn" onclick="togglePlay()">
+▶ PLAY
+</button>
+
+<button class="control-btn" onclick="stopRadio()">
+■ STOP
+</button>
+
+<button class="control-btn" onclick="prevStation()">
+⏮ PREV
+</button>
+
+<button class="control-btn" onclick="nextStation()">
+NEXT ⏭
+</button>
+
+<button class="control-btn power-btn" onclick="powerOff()">
+⏻ Power Off
+</button>
+</div>
+
+
+<p>Volume</p>
+
+<div id="volumeValue">100%</div>
+
+<div class="volume-row">
+<button class="volume-step-btn" onclick="decreaseVolume()">-</button>
+
+<input
+type="range"
+min="0"
+max="100"
+value="100"
+id="volumeSlider"
+onchange="setVolume(this.value)">
+
+<button class="volume-step-btn" onclick="increaseVolume()">+</button>
+</div>
+
+<div id="radioSection" class="mode-section">
+<h3>Categories</h3>
+
+<div id="categories" class="categories-scroll"></div>
+
+<div class="manage-buttons">
+<button class="manage-toggle-btn" onclick="openManageCategoriesModal()">Manage Categories</button>
+<button id="manageStationsBtn" class="manage-toggle-btn" onclick="openManageStationsModal()">Manage Stations</button>
+</div>
+
+<h3>Stations</h3>
+
+<div id="stations"></div>
+</div>
+
+<div id="mediaSection" class="mode-section hidden">
+<h3>Media Servers</h3>
+
+<div class="manage-buttons">
+<button class="manage-toggle-btn" onclick="refreshDlnaServers()">Refresh Servers</button>
+<button class="manage-toggle-btn" onclick="goDlnaHome()">Go Home</button>
+</div>
+
+<div id="dlnaServers"></div>
+
+<h3>Browse</h3>
+<div id="dlnaBreadcrumb" class="categories-scroll"></div>
+<button id="dlnaUpBtn" class="dlna-up-btn hidden" onclick="goUpDlnaLevel()"><img src="/static/icons/up-arrow.svg" alt="Up"></button>
+<div id="dlnaItems"></div>
+</div>
+
+<div id="manageCategoriesModal" class="modal hidden">
+<div class="modal-card">
+<h4>Manage Categories</h4>
+<div class="manager-grid">
+<div id="selectedCategoryName" class="modal-note">Selected: -</div>
+<input id="newCategoryName" type="text" placeholder="Add new category">
+<button onclick="addCategory()">Add Category</button>
+<input id="renameCategoryName" type="text" placeholder="Rename selected category">
+</div>
+<div class="modal-actions">
+<button onclick="renameSelectedCategory()">Save Name</button>
+<button onclick="deleteSelectedCategory()">Delete Selected</button>
+</div>
+<div class="modal-actions single">
+<button onclick="closeManageCategoriesModal()">Close</button>
+</div>
+</div>
+</div>
+
+<div id="manageStationsModal" class="modal hidden">
+<div class="modal-card">
+<h4>Manage Stations</h4>
+<div id="manageStationsTitle" class="modal-note">Category: -</div>
+<div class="manager-grid">
+<input id="newStationName" type="text" placeholder="Station name">
+<input id="newStationUrl" type="text" placeholder="Stream URL">
+<button onclick="addStationToSelectedCategory()">Add Station</button>
+</div>
+<div id="stationAdminList" class="admin-list"></div>
+<div class="modal-actions single">
+<button onclick="closeManageStationsModal()">Close</button>
+</div>
+</div>
+</div>
+
+<div id="editStationModal" class="modal hidden">
+<div class="modal-card">
+<h4>Edit Station</h4>
+<div class="manager-grid">
+<input id="editStationName" type="text" placeholder="Station name">
+<input id="editStationUrl" type="text" placeholder="Stream URL">
+<select id="editStationCategory"></select>
+</div>
+<div class="modal-actions">
+<button onclick="saveEditStation()">Save</button>
+<button onclick="closeEditStationModal()">Cancel</button>
+</div>
+</div>
+</div>
+
+<div id="settingsModal" class="modal hidden">
+<div class="modal-card">
+<h4>Settings</h4>
+<div class="settings-list">
+<button class="settings-item" onclick="openBluetoothModal()">
+<span>🔵 Bluetooth</span>
+<span class="settings-item-arrow">›</span>
+</button>
+<button class="settings-item" onclick="openWifiModal()">
+<span>📶 Wi-Fi</span>
+<span class="settings-item-arrow">›</span>
+</button>
+<button class="settings-item" onclick="openRenameRadioModal()">
+<span>📝 Rename Radio</span>
+<span class="settings-item-arrow">›</span>
+</button>
+</div>
+<div class="modal-actions single">
+<button onclick="closeSettingsModal()">Close</button>
+</div>
+</div>
+</div>
+
+<div id="renameRadioModal" class="modal hidden">
+<div class="modal-card">
+<h4>Rename Radio</h4>
+<div class="manager-grid">
+<input id="renameRadioInput" type="text" placeholder="Enter radio name">
+</div>
+<div class="modal-actions">
+<button onclick="saveRadioName()">Save</button>
+<button onclick="closeRenameRadioModal()">Cancel</button>
+</div>
+</div>
+</div>
+
+<div id="bluetoothModal" class="modal hidden">
+<div class="modal-card">
+<h4>Bluetooth</h4>
+<div class="bluetooth-power-row">
+<span>Bluetooth</span>
+<label class="toggle-switch">
+<input type="checkbox" id="bluetoothPowerToggle" onchange="toggleBluetoothPower(this.checked)">
+<span class="toggle-slider"></span>
+</label>
+</div>
+<div id="bluetoothNote" class="modal-note">Turn off Bluetooth to use the headphone jack.</div>
+<div class="modal-actions single">
+<button id="bluetoothScanBtn" onclick="scanBluetoothDevices()">🔍 Scan for Devices</button>
+</div>
+<div id="bluetoothDeviceList" class="admin-list"></div>
+<div class="modal-actions single">
+<button onclick="closeBluetoothModal()">Back</button>
+</div>
+</div>
+</div>
+
+<div id="wifiModal" class="modal hidden">
+<div class="modal-card">
+<h4>Wi-Fi</h4>
+<div id="wifiStatusNote" class="modal-note">Checking status...</div>
+<div class="modal-actions single">
+<button id="wifiScanBtn" onclick="scanWifiNetworks()">🔍 Scan for Networks</button>
+</div>
+<div id="wifiNetworkList" class="admin-list"></div>
+
+<div id="wifiConnectForm" class="wifi-connect-form hidden">
+<div id="wifiConnectSsid" class="modal-note">Connect to: -</div>
+<input id="wifiPasswordInput" type="password" placeholder="Wi-Fi password">
+<div class="modal-actions">
+<button onclick="submitWifiConnect()">Connect</button>
+<button onclick="cancelWifiConnect()">Cancel</button>
+</div>
+</div>
+
+<div class="modal-actions single">
+<button onclick="closeWifiModal()">Back</button>
+</div>
+</div>
+</div>
+
+
+</div>
+
+
+
+
+<script src="/static/app.js?v=20260817d"></script>
+
+</body>
+
+</html>

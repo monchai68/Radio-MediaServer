@@ -10,7 +10,7 @@
 - จัดการ Bluetooth: เปิด/ปิด, สแกน, pair, connect และ disconnect ลำโพง
 - สลับ MPD audio output ระหว่างแจ็คหูฟัง/USB กับ Bluetooth โดยอัตโนมัติ
 - สแกนและเชื่อมต่อ Wi-Fi จากหน้าเว็บผ่าน NetworkManager
-- เปิด hotspot สำรองสำหรับการตั้งค่า Wi-Fi ครั้งแรก
+- เปิด hotspot สำรองสำหรับการตั้งค่า Wi-Fi ครั้งแรก (ตอนบูต) และอัตโนมัติอีกครั้งถ้า Wi-Fi หลุดระหว่างใช้งาน (runtime monitor)
 - จำ audio output และ playback mode ล่าสุดไว้หลังรีสตาร์ต
 
 ## สถาปัตยกรรม
@@ -114,18 +114,33 @@ mpc outputs
 
 ## Wi-Fi Fallback Hotspot
 
-เมื่อ Pi บูตแล้วเชื่อมต่อ Wi-Fi ไม่ได้ภายใน 25 วินาที สคริปต์จะเปิด hotspot ชื่อ `PiRadio-Setup` เพื่อให้เข้าเว็บไปเลือก Wi-Fi จริง
+มี 2 กลไกทำงานร่วมกัน คนละช่วงเวลา ไม่ได้แทนที่กัน:
 
-ก่อนเปิดใช้จริง ให้เปลี่ยน `HOTSPOT_PASSWORD` ใน [scripts/wifi-fallback.sh](scripts/wifi-fallback.sh) จากค่าเริ่มต้น จากนั้นติดตั้ง systemd service:
+1. **ตอนบูต** (`scripts/wifi-fallback.sh` + `.service`): เมื่อ Pi บูตแล้วเชื่อมต่อ Wi-Fi ไม่ได้ภายในเวลาที่กำหนด (ดูค่า `WAIT_SECONDS` ในสคริปต์) จะเปิด hotspot ชื่อ `PiRadio-Setup` เพื่อให้เข้าเว็บไปเลือก Wi-Fi จริง ทำงานเป็น systemd `oneshot` แค่ครั้งเดียวตอนบูต ก่อนที่ Flask app/MPD จะพร้อมทำงานด้วยซ้ำ
 
-```bash
-sudo install -m 755 scripts/wifi-fallback.sh /usr/local/bin/wifi-fallback.sh
-sudo install -m 644 scripts/wifi-fallback.service /etc/systemd/system/wifi-fallback.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now wifi-fallback.service
-```
+   ก่อนเปิดใช้จริง ให้เปลี่ยน `HOTSPOT_PASSWORD` ใน [scripts/wifi-fallback.sh](scripts/wifi-fallback.sh) จากค่าเริ่มต้น จากนั้นติดตั้ง systemd service:
 
-service นี้ต้องรันบน host OS และไม่ใช่ส่วนหนึ่งของ Flask process
+   ```bash
+   sudo install -m 755 scripts/wifi-fallback.sh /usr/local/bin/wifi-fallback.sh
+   sudo install -m 644 scripts/wifi-fallback.service /etc/systemd/system/wifi-fallback.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now wifi-fallback.service
+   ```
+
+   service นี้ต้องรันบน host OS และไม่ใช่ส่วนหนึ่งของ Flask process
+
+2. **ระหว่างใช้งาน** (`monitor_wifi_connectivity()` ใน `app.py`): background thread ที่ทำงานตลอดอายุของแอป คอยเช็คสถานะ Wi-Fi/ethernet เป็นระยะ ถ้าหลุดการเชื่อมต่อติดต่อกันหลายครั้ง (เช่น router รีสตาร์ท หรือย้ายอุปกรณ์ออกนอกระยะ) จะเปิด hotspot ให้อัตโนมัติโดยไม่ต้อง reboot เครื่อง ทำงานเหมือนกันทั้ง bare-metal และ Docker เพราะ `app.py` เป็นไฟล์เดียวที่ deploy ทั้งสองที่
+
+   ตั้งค่าได้ผ่าน environment variable (ไม่ตั้งจะใช้ค่า default):
+
+   | ตัวแปร | ค่า default | ความหมาย |
+   | --- | --- | --- |
+   | `PIRADIO_HOTSPOT_PASSWORD` | `piradio1234` | รหัสผ่าน hotspot ที่ตั้งตอนสร้าง profile ครั้งแรกเท่านั้น (ไม่ overwrite รหัสผ่านที่เคยตั้งไว้แล้ว) |
+   | `PIRADIO_WIFI_MONITOR_INTERVAL` | `20` วินาที | ความถี่ในการเช็คสถานะ |
+   | `PIRADIO_WIFI_MONITOR_GRACE_PERIOD` | `150` วินาที | เวลารอหลังแอปเริ่มทำงานก่อนเริ่มตัดสินใจ เผื่อให้ `wifi-fallback.sh` ตอนบูตทำงานจบก่อน |
+   | `PIRADIO_WIFI_MONITOR_FAILURE_THRESHOLD` | `3` ครั้ง | จำนวนครั้งที่ต้องหลุดติดต่อกันก่อนเปิด hotspot |
+
+   ดูรายละเอียดเพิ่มเติมใน [modified.md](modified.md) หัวข้อ "Runtime Wi-Fi Connectivity Monitor"
 
 ## ข้อมูลที่บันทึก
 

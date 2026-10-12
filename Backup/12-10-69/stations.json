@@ -1,0 +1,203 @@
+{
+  "categories": [
+    {
+      "id": 1,
+      "name": "รายการโปรด"
+    },
+    {
+      "id": 2,
+      "name": "เพลงสตริงไทย"
+    },
+    {
+      "id": 3,
+      "name": "เพลงไทยวันวาน"
+    },
+    {
+      "id": 4,
+      "name": "เพลงสากล"
+    },
+    {
+      "id": 5,
+      "name": "ข่าวไทย"
+    },
+    {
+      "id": 6,
+      "name": "ข่าวต่างประเทศ"
+    },
+    {
+      "id": 7,
+      "name": "อื่นๆ"
+    }
+  ],
+  "stations": [
+    {
+      "id": 1,
+      "name": "Green wave",
+      "url": "https://atimeonline2.smartclick.co.th/green",
+      "category_id": 2,
+      "favorite": true
+    },
+    {
+      "id": 2,
+      "name": "Thinking Radio",
+      "url": "https://e4hq2o44.mcot.net/FM965/fm965.stream_aac/chunklist_w1057835696.m3u8",
+      "category_id": 5,
+      "favorite": true
+    },
+    {
+      "id": 3,
+      "name": "Yesterday",
+      "url": "http://radio4.thzhost.com:4122/;",
+      "category_id": 3,
+      "favorite": true
+    },
+    {
+      "id": 4,
+      "name": "Radio Paradise",
+      "url": "https://stream-uk1.radioparadise.com/mp3-192",
+      "category_id": 4,
+      "favorite": false
+    },
+    {
+      "id": 5,
+      "name": "Great 93 FM",
+      "url": "http://radio.vpsthai.net:9000/stream",
+      "category_id": 2,
+      "favorite": true
+    },
+    {
+      "id": 8,
+      "name": "Flex 104.5",
+      "url": "https://streaming.flexconnect.net/voiceflex/voiceflex/playlist.m3u8",
+      "category_id": 2,
+      "favorite": false
+    },
+    {
+      "id": 9,
+      "name": "Chiang Mai Radio 93.75",
+      "url": "http://112.121.151.133:8124/live",
+      "category_id": 2,
+      "favorite": false
+    },
+    {
+      "id": 10,
+      "name": "Eing Doi Radio",
+      "url": "https://djstreamsv1.hostpleng.cloud/KntU",
+      "category_id": 2,
+      "favorite": true
+    },
+    {
+      "id": 11,
+      "name": "EFM",
+      "url": "https://atimeonline3.smartclick.co.th/efm",
+      "category_id": 2,
+      "favorite": false
+    },
+    {
+      "id": 13,
+      "name": "Cool farenheit",
+      "url": "https://coolism-web.cdn.byteark.com/;stream/1",
+      "category_id": 2,
+      "favorite": false
+    },
+    {
+      "id": 14,
+      "name": "Musichitz",
+      "url": "https://hp2.hostpleng.cloud/8122/live",
+      "category_id": 2,
+      "favorite": false
+    },
+    {
+      "id": 15,
+      "name": "Request Radio Inter",
+      "url": "http://27.254.142.208:8400/stream/1/",
+      "category_id": 4,
+      "favorite": true
+    },
+    {
+      "id": 16,
+      "name": "ครอบครัวข่าว",
+      "url": "https://media.onair.one:8110/106",
+      "category_id": 5,
+      "favorite": false
+    },
+    {
+      "id": 18,
+      "name": "MET 107 FM",
+      "url": "https://eb27a17z.mcot.net/FM107/fm107.stream_aac/chunklist_w1140048493.m3u8",
+      "category_id": 4,
+      "favorite": false
+    },
+    {
+      "id": 19,
+      "name": "Talay 90.25",
+      "url": "https://stream.talay.asia/talay",
+      "category_id": 2,
+      "favorite": false
+    },
+    {
+      "id": 20,
+      "name": "MCOTS NEWS",
+      "url": "https://streaming-edge-cdn.mcot.net/live_edge/smil:1861-f145-be67-1edf-7859.smil/chunklist_w1649231105_b3128000.m3u8",
+      "category_id": 5,
+      "favorite": false
+    },
+    {
+      "id": 21,
+      "name": "WTOP NEWS",
+      "url": "https://26193.live.streamtheworld.com/WTOPFM.mp3?dist=hubbard&source=hubbard-web&ttag=web&gdpr=0",
+      "category_id": 6,
+      "favorite": false
+    },
+    {
+      "id": 22,
+      "name": "WNYC",
+      "url": "http://hls-live.wnyc.org/wnycfmapp-hls.aac/playlist.m3u8",
+      "category_id": 6,
+      "favorite": false
+    },
+    {
+      "id": 23,
+      "name": "Ondio New",
+      "url": "http://112.121.150.133:8020/stream",
+      "category_id": 2,
+      "favorite": false
+    },
+    {
+      "id": 24,
+      "name": "ข่าวจราจร สวพ Fm 91",
+      "url": "http://122.155.16.48:8955/;stream.mp3",
+      "category_id": 5,
+      "favorite": false
+    },
+    {
+      "id": 25,
+      "name": "Smooth FM 105.5",
+      "url": "https://3i4812r7.mcot.net/FM1055/fm1055.stream_aac/chunklist_w343041127.m3u8",
+      "category_id": 3,
+      "favorite": false
+    },
+    {
+      "id": 26,
+      "name": "Yes Radio",
+      "url": "http://27.254.65.244:8000",
+      "category_id": 3,
+      "favorite": false
+    },
+    {
+      "id": 27,
+      "name": "Pattaya Mundee",
+      "url": "https://media.onair.one:8100/OBdirect",
+      "category_id": 4,
+      "favorite": false
+    },
+    {
+      "id": 28,
+      "name": "Rad Radio",
+      "url": "http://radio1.serverradio.net:8592/;?type=http",
+      "category_id": 3,
+      "favorite": false
+    }
+  ],
+  "playback_mode": "media_server"
+}

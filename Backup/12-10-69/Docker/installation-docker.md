@@ -1,0 +1,634 @@
+# ติดตั้งและทดสอบบน Raspberry Pi 3B แบบ Headless
+
+เอกสารนี้เป็นขั้นตอนสำหรับ Raspberry Pi 3B ที่เพิ่งติดตั้ง Raspberry Pi OS แบบ headless เพื่อทดสอบ Docker deployment ของโปรเจกต์นี้
+
+ชุดนี้รองรับ Internet Radio, DLNA, MPD, การเก็บข้อมูลสถานีใน volume, Bluetooth speaker, Power Off (ผ่าน host helper), Wi‑Fi scan/connect (ต้อง install `network-manager` ใน image ซึ่งทำไว้แล้ว) และ Wi‑Fi fallback hotspot (host-side). ดูหัวข้อ 10
+
+## สรุปลำดับการติดตั้ง
+
+ทำตามลำดับนี้เพื่อให้ระบุปัญหาได้ง่าย: ติดตั้ง Docker/MPD บน host > ยืนยัน `mpc status` > ส่ง source > build/start container > ทดสอบ Radio และ volume > ติดตั้ง BlueZ/BlueALSA > ตั้ง MPD Bluetooth output > rebuild container > pair/connect speaker และทดสอบเสียง > ติดตั้ง poweroff helper บน host > ติดตั้ง Wi‑Fi fallback hotspot บน host > ทดสอบปุ่ม Power Off และ fallback hotspot
+
+MPD, BlueZ, BlueALSA และ poweroff helper ทำงานบน Pi host. Container ทำหน้าที่เป็น Flask web app, `mpc` client, `bluetoothctl` client และ client ของ poweroff helper (ผ่าน Unix socket) เท่านั้น — container เองไม่มี `sudo` หรือสิทธิ์ปิดเครื่อง host โดยตรง
+
+## สิ่งที่ต้องเตรียม
+
+- Raspberry Pi 3B พร้อม microSD, network และไฟเลี้ยงที่เสถียร
+- คอมพิวเตอร์ Windows ที่มี source project นี้อยู่ที่ `D:\code\Flask\PiZero2W`
+- Raspberry Pi Imager สำหรับเขียน Raspberry Pi OS
+- LAN เดียวกันระหว่าง Windows, Pi และ DLNA Media Server (ถ้าจะทดสอบ DLNA)
+
+Pi 3B ใช้ได้ทั้ง Raspberry Pi OS 32-bit และ 64-bit. Dockerfile จะ build image ตาม architecture ของ Pi โดยอัตโนมัติเมื่อ build บน Pi. Raspberry Pi OS 64-bit แนะนำสำหรับการใช้งานใหม่
+
+## 1. เขียน Raspberry Pi OS และเปิด SSH
+
+1. เปิด Raspberry Pi Imager แล้วเลือก `Raspberry Pi OS Lite (64-bit)` หรือรุ่น 32-bit หากจำเป็น
+2. กดปุ่มตั้งค่า (รูปเฟือง) ก่อนเขียน SD card แล้วตั้งค่า:
+   - hostname เช่น `piradio3b`
+   - username และ password ที่รัดกุม
+   - Wi-Fi SSID/password หากจะต่อ Wi-Fi
+   - locale/time zone
+   - เปิด `Enable SSH` และเลือก password authentication หรือ public key
+3. เขียน SD card, ใส่ใน Pi แล้วเปิดเครื่อง
+4. หา IP ของ Pi จากหน้า router หรือใช้ hostname ที่ตั้งไว้ แล้วเชื่อมต่อจาก PowerShell:
+
+   ```powershell
+   ssh <pi-user>@piradio3b.local
+   ```
+
+ใช้ IP แทน `piradio3b.local` ได้ เช่น `ssh monchai68@192.168.1.50`
+
+## 2. อัปเดตระบบและติดตั้ง Docker/MPD
+
+รันคำสั่งต่อไปนี้ผ่าน SSH บน Pi:
+
+```bash
+sudo apt update
+sudo apt full-upgrade -y
+sudo apt install -y docker.io docker-compose mpd mpc
+sudo systemctl enable --now docker mpd
+sudo usermod -aG docker $USER
+```
+
+ออกจาก SSH แล้วเชื่อมใหม่หนึ่งครั้ง เพื่อให้ group `docker` มีผล:
+
+```bash
+exit
+ssh <pi-user>@piradio3b.local
+docker --version
+docker compose version
+mpc status
+```
+
+Pi ที่ทดสอบในเอกสารนี้ใช้ Docker Compose V2 และใช้คำสั่ง `docker compose` (ไม่มีขีดกลาง) ตลอดคู่มือ. หาก `docker compose version` ใช้ไม่ได้ แต่ `docker-compose --version` ใช้ได้ ให้เปลี่ยนทุกคำสั่ง `docker compose` ในเอกสารนี้เป็น `docker-compose` แทน
+
+## 3. ตรวจ MPD บน host ก่อนใช้ Docker
+
+container จะเชื่อม MPD ที่รันอยู่บน host ด้วย `MPD_HOST=127.0.0.1` และ port `6600` ดังนั้นต้องให้คำสั่งนี้ทำงานบน Pi ก่อน:
+
+```bash
+mpc status
+```
+
+หากเชื่อมต่อไม่ได้ ให้ตรวจ service และ port:
+
+```bash
+sudo systemctl status mpd --no-pager
+sudo ss -ltnp | grep 6600
+```
+
+ผลลัพธ์ลักษณะนี้ถือว่า MPD ใช้งานได้ แม้ยังไม่มีเพลงใน queue:
+
+```text
+volume: n/a   repeat: off   random: off   single: off   consume: off
+```
+
+`volume: n/a` หมายถึง output ยังไม่มี mixer จึงปรับเสียงจากหน้าเว็บหรือ `mpc volume` ไม่ได้. สำหรับ ALSA output ให้แก้ block `audio_output` ที่ใช้งานใน `/etc/mpd.conf` ให้มี `mixer_type "software"` แล้ว restart:
+
+```conf
+audio_output {
+   type            "alsa"
+   name            "My ALSA Device"
+   device          "default"
+   mixer_type      "software"
+}
+```
+
+```bash
+sudo systemctl restart mpd
+mpc volume 30
+mpc status
+```
+
+หลังแก้สำเร็จ ต้องเห็น `volume: 30%` หรือค่าเปอร์เซ็นต์อื่น แทน `volume: n/a`. หาก restart ไม่ผ่าน ให้ตรวจ syntax และ audio device ก่อนแก้ต่อ:
+
+```bash
+sudo systemctl status mpd.service --no-pager -l
+sudo journalctl -u mpd.service -n 80 --no-pager
+```
+
+## 4. ส่ง source project จาก Windows ไป Pi
+
+บน Windows PowerShell ให้สร้างปลายทางบน Pi ก่อน แล้วเปิดที่ project root เพื่อส่ง source ไปที่ home directory ของ Pi. คำสั่งนี้ไม่ส่ง `.venv`, `.git`, cache, backup หรือ runtime data:
+
+```powershell
+ssh <pi-user>@piradio3b.local "mkdir -p ~/radio-server"
+Set-Location D:\code\Flask\PiZero2W
+scp -r app.py stations.json requirements.txt templates static Docker <pi-user>@piradio3b.local:~/radio-server
+```
+
+ถ้าใช้ IP ให้แทนปลายทางตัวอย่างเป็น `<pi-user>@192.168.1.50:~/radio-server`
+
+ต้องมีปลายทาง `<pi-user>@...:~/radio-server` ต่อท้ายเสมอ. หากสั่ง `scp` โดยไม่มีปลายทาง โปรแกรมจะมองชื่อไฟล์สุดท้ายเป็นปลายทางและอาจแสดง error เช่น `.dockerignore: Not a directory`. โปรเจกต์นี้ไม่จำเป็นต้องส่ง `.dockerignore` เพื่อ deploy นี้
+
+ตรวจไฟล์บน Pi:
+
+```bash
+ssh <pi-user>@piradio3b.local
+cd ~/radio-server/Docker
+ls -la
+```
+
+ต้องเห็นอย่างน้อย `Dockerfile`, `compose.yaml`, `entrypoint.sh`, `requirements.txt` และ `wsgi.py`
+
+## 5. Build และ start container
+
+ยังอยู่บน Pi ให้สั่ง:
+
+```bash
+cd ~/radio-server/Docker
+docker compose build
+docker compose up -d
+docker compose ps
+```
+
+การ build ครั้งแรกบน Pi 3B อาจใช้เวลาหลายนาที โดยเฉพาะการดาวน์โหลด Python image และติดตั้ง Python packages. อย่าตัดไฟระหว่าง build
+
+ตรวจ log:
+
+```bash
+docker compose logs --tail=100 piradio
+```
+
+สถานะปกติควรเห็น container `piradio` เป็น `running` และไม่มี Python traceback
+
+## 6. Smoke Test
+
+### ตรวจ Flask API บน Pi
+
+เพราะ Compose ใช้ `network_mode: host` web app จะฟังที่ port `5000` ของ Pi โดยตรง:
+
+```bash
+curl -fsS http://127.0.0.1:5000/api/status
+curl -fsS http://127.0.0.1:5000/api/data
+```
+
+ผลลัพธ์ `/api/status` ควรเป็น JSON และมี `"available": true`. หากเป็น `false` ให้ตรวจ MPD ตามหัวข้อ 3 และสั่งทดสอบจากใน container:
+
+```bash
+docker compose exec piradio mpc status
+```
+
+### เปิดหน้าเว็บจากเครื่องใน LAN
+
+ดู IP ของ Pi:
+
+```bash
+hostname -I
+```
+
+จาก browser บน Windows หรือมือถือ เปิด:
+
+```text
+http://<pi-ip>:5000
+```
+
+ทดสอบตามลำดับ:
+
+1. เลือก Internet Radio หนึ่งสถานี แล้วกด Play
+2. ตรวจสถานะจากหน้าเว็บและ `mpc status` บน Pi
+3. สลับ Media Server และกด Refresh Servers เพื่อตรวจ DLNA discovery
+4. เลือกเพลง DLNA แล้วตรวจว่า MPD queue มีรายการด้วย `mpc playlist`
+
+DLNA discovery ต้องมี media server อยู่ LAN/subnet เดียวกัน และบาง router หรือ Wi-Fi isolation อาจบล็อก SSDP multicast
+
+## 7. ตรวจข้อมูล persistent
+
+ครั้งแรกที่ container start จะสร้าง `Docker/data/stations.json` โดยคัดลอกค่าเริ่มต้นที่ build อยู่ใน image. การแก้สถานีและ playback mode จากเว็บหลังจากนั้นจะเขียนไฟล์นี้:
+
+```bash
+cd ~/radio-server/Docker
+ls -la data
+cat data/stations.json
+```
+
+source `~/radio-server/stations.json` จะไม่ถูกแก้โดย container. สำรอง data ก่อน update หรือ rebuild สำคัญ:
+
+```bash
+tar -czf ~/piradio-data-backup-$(date +%F).tar.gz ~/radio-server/Docker/data
+```
+
+## 8. เปิดใช้ Bluetooth speaker
+
+การ connect Bluetooth สำเร็จยืนยันเพียงการเชื่อมต่อระหว่าง Pi และ speaker; เพื่อให้มีเสียง ต้องมี BlueALSA ที่สร้าง ALSA route และต้องตั้ง MPD output ให้ชี้ไปที่ speaker นั้นด้วย
+
+Bluetooth daemon และ audio backend ต้องรันบน host; container ใช้ `bluetoothctl` เพื่อสั่งงานผ่าน system D-Bus ของ host เท่านั้น. ติดตั้ง BlueZ และ BlueALSA บน Pi:
+
+```bash
+sudo apt update
+sudo apt install -y bluez bluez-alsa-utils
+sudo systemctl enable --now bluetooth bluealsa
+sudo rfkill unblock bluetooth
+bluetoothctl show
+```
+
+หาก `bluetoothctl show` แสดง `Powered: no` ให้เปิด controller:
+
+```bash
+bluetoothctl power on
+```
+
+หาก `bluealsa` ไม่มี service หรือไม่พบ ALSA device `bluealsa` ให้ตรวจ package ที่ Raspberry Pi OS รุ่นนั้นมี แล้วติดตั้ง bluez-alsa backend:
+
+```bash
+apt search bluez-alsa
+aplay -L | grep bluealsa
+```
+
+เปิด speaker ให้อยู่ใน pairing mode. หลังเชื่อมจากหน้าเว็บสำเร็จ สามารถใช้คำสั่งนี้ยืนยันว่า speaker connected แล้ว:
+
+```bash
+bluetoothctl devices Connected
+```
+
+จากนั้นตั้ง MPD output ครั้งเดียว โดยไม่ต้องใส่ MAC address ของ speaker. เมื่อกด Connect จากหน้าเว็บ โปรแกรมจะนำ MAC ของ speaker ที่เชื่อมสำเร็จมาอัปเดต output นี้และ restart MPD ให้อัตโนมัติ จึงสลับใช้ลำโพงหลายตัวได้โดยไม่ต้องแก้ `/etc/mpd.conf` เอง:
+
+```bash
+sudo nano /etc/mpd.conf
+```
+
+เพิ่มหรือแก้ block นี้ โดยชื่อ `Bluetooth Speaker` ต้องตรงตามนี้:
+
+```conf
+audio_output {
+   type            "alsa"
+   name            "Bluetooth Speaker"
+   device          "bluealsa:DEV=00:00:00:00:00:00,PROFILE=a2dp"
+   mixer_type      "software"
+}
+```
+
+MAC `00:00:00:00:00:00` เป็นค่าเริ่มต้นเท่านั้น และจะถูกแทนที่อัตโนมัติหลังเชื่อม speaker ครั้งแรก. Restart MPD และตรวจว่า output ถูกพบ:
+
+```bash
+sudo systemctl restart mpd
+mpc outputs
+mpc status
+```
+
+ต้องเห็น output ชื่อ `Bluetooth Speaker` จาก `mpc outputs`. ชื่อนี้จำเป็น เพราะแอปเปิด output ตามชื่อนี้เมื่อเชื่อม speaker. หาก output อื่นกำลัง active ให้จดหมายเลขจาก `mpc outputs` แล้วปิด output เดิมและเปิด Bluetooth output:
+
+```bash
+mpc disable <existing-output-id>
+mpc enable <bluetooth-output-id>
+```
+
+ฟีเจอร์อัปเดต MAC อัตโนมัติต้องใช้ host helper เวอร์ชันใหม่ตามหัวข้อ 9. หากเคยติดตั้ง helper ไว้ก่อนอัปเดตโค้ดนี้ ให้รันคำสั่งติดตั้งในหัวข้อ 9 ซ้ำ; คำสั่ง `restart` ในขั้นตอนนั้นจำเป็นเพื่อให้ helper โหลดโค้ดใหม่ก่อนทดสอบ Connect speaker.
+
+ส่ง Docker files ที่แก้ไขแล้วจาก Windows ตามหัวข้อ 4 แล้ว rebuild container เพื่อเพิ่ม `bluetoothctl` และ mount system D-Bus socket:
+
+```bash
+cd ~/radio-server/Docker
+grep bluez Dockerfile
+grep system_bus_socket compose.yaml
+docker compose down
+docker compose build --no-cache
+docker compose up -d --force-recreate
+docker compose exec piradio bluetoothctl show
+curl -fsS http://127.0.0.1:5000/api/bluetooth/status
+```
+
+`grep bluez Dockerfile` ต้องแสดง `bluez mpc` และ `grep system_bus_socket compose.yaml` ต้องแสดง D-Bus mount. การ build แบบ `--no-cache` และ `--force-recreate` สำคัญเมื่อ container เดิมขึ้น error `bluetoothctl: executable file not found in $PATH`; error นี้หมายถึง container ยังใช้ image เก่า
+
+ผลของ API ต้องมี `"available":true`. เปิดหน้าเว็บที่ `http://<pi-ip>:5000`, เข้า Settings > Bluetooth, เปิด Bluetooth, กด Scan for Devices และเลือก Connect ที่ speaker. เมื่อเชื่อมสำเร็จ โปรแกรมจะอัปเดต MAC ใน MPD output ชื่อ `Bluetooth Speaker`, restart MPD และเปิด output นี้อัตโนมัติ
+
+ทดสอบบน Pi:
+
+```bash
+bluetoothctl devices Connected
+aplay -L | grep -i bluealsa
+mpc outputs
+mpc status
+```
+
+ก่อนทดสอบเสียง ต้องเห็นทั้ง speaker ใน `bluetoothctl devices Connected`, device `bluealsa:` จาก `aplay -L` และ `Bluetooth Speaker` จาก `mpc outputs`. จากนั้นเลือกสถานีในหน้าเว็บและกด Play. `mpc status` ต้องแสดง `state: playing` และ speaker ต้องมีเสียง
+
+Mount system D-Bus ทำให้ process ใน container ควบคุม Bluetooth ของ Pi ได้. หน้าเว็บนี้ไม่มี authentication จึงควรใช้เฉพาะ LAN ที่เชื่อถือได้ และห้าม port-forward port 5000 ออก Internet
+
+## 9. เปิดใช้ Host Helper สำหรับ Power Off และ Bluetooth Speaker
+
+Container ไม่มี `sudo` และไม่มีสิทธิ์เขียน `/etc/mpd.conf` หรือสั่งปิดเครื่องจริงของ host (ไม่เปิด `privileged: true` เพราะให้สิทธิ์เกินจำเป็น) ดังนั้นใช้ **host helper** แยกต่างหาก: เป็นสคริปต์ Python เล็กๆ ที่รันบน Pi host โดยตรง (นอก container) และเปิด Unix socket สองตัว:
+
+- `/run/piradio/poweroff.sock` สำหรับปุ่ม Power Off
+- `/run/piradio/mpd-config.sock` สำหรับอัปเดต MAC ใน MPD output `Bluetooth Speaker` และ restart MPD อัตโนมัติเมื่อ Connect speaker ใหม่
+
+หัวข้อนี้ใช้เฉพาะ Pi ที่ deploy ด้วย Docker Compose. Pi Zero 2W แบบ bare-metal ใช้ helper ผ่าน `sudo` โดยตรงแทน ดูขั้นตอนติดตั้งและ sudoers ใน [installation-guide.md](../installation-guide.md).
+
+ไฟล์ที่ต้องใช้อยู่ใน `Docker/scripts/piradio-poweroff-helper.py` และ `Docker/scripts/piradio-poweroff-helper.service` (มากับ source ที่ scp ไปแล้วตามหัวข้อ 4)
+
+### ติดตั้ง helper บน host
+
+ไฟล์ระบบอย่าง `/usr/local/bin` และ `/etc/systemd/system` เขียนตรงผ่าน `scp`/SFTP ด้วย user ธรรมดาไม่ได้ (permission denied) ต้องติดตั้งไฟล์จาก `~/radio-server/Docker/scripts` ด้วย `sudo` ก่อนเสมอ **ห้ามรัน `systemctl enable` ทันทีเพียงเพราะอยู่ในโฟลเดอร์ `scripts`** เพราะ systemd จะยังไม่เห็น unit และจะแจ้ง `Unit piradio-poweroff-helper.service does not exist`:
+
+```bash
+cd ~/radio-server/Docker/scripts
+sudo install -m 755 piradio-poweroff-helper.py /usr/local/bin/piradio-poweroff-helper.py
+sudo install -m 644 piradio-poweroff-helper.service /etc/systemd/system/piradio-poweroff-helper.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now piradio-poweroff-helper.service
+sudo systemctl restart piradio-poweroff-helper.service
+sudo systemctl status piradio-poweroff-helper.service --no-pager
+```
+
+คำสั่ง `restart` ต้องรันแม้ service เดิมเป็น `active (running)` เพราะ `enable --now` จะไม่ restart process ที่ทำงานอยู่ และ helper เวอร์ชันเดิมจะยังไม่มี socket `mpd-config.sock`.
+
+หากยังขึ้นว่าไม่พบ unit ให้ตรวจว่าไฟล์ถูกติดตั้งจริงก่อน แล้วค่อย `daemon-reload` และ `enable` ซ้ำ:
+
+```bash
+sudo ls -l /etc/systemd/system/piradio-poweroff-helper.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now piradio-poweroff-helper.service
+```
+
+ต้องเห็นสถานะ `active (running)` และ socket ทั้งสองต้องถูกสร้างด้วย permission `0600` เจ้าของ root:
+
+```bash
+ls -l /run/piradio/poweroff.sock /run/piradio/mpd-config.sock
+```
+
+### เปิดใช้งานฝั่ง container
+
+`Docker/compose.yaml` ตั้ง env var สำหรับ Power Off และ MPD config helper รวมถึง bind mount `/run/piradio:/run/piradio` ไว้ให้แล้ว หลังติดตั้ง helper เสร็จ ให้ rebuild container เพื่อให้ mount มีผล:
+
+```bash
+cd ~/radio-server/Docker
+docker compose up -d --build
+docker compose exec piradio ls -l /run/piradio/
+```
+
+ต้องเห็นทั้ง `poweroff.sock` และ `mpd-config.sock` จากใน container (แปลว่า mount ผ่าน)
+
+### ทดสอบ
+
+เปิดหน้าเว็บที่ `http://<pi-ip>:5000` แล้วกดปุ่ม Power Off (ปุ่มแดง) เครื่อง Pi ต้องปิดจริง หากต้องการดู log ระหว่างทดสอบ:
+
+```bash
+journalctl -u piradio-poweroff-helper.service -f
+```
+
+Helper service ต้อง `enable` ไว้ถาวร (ไม่ใช่แค่ `start`) เพราะ `/run` เป็น tmpfs หายทุกครั้งที่รีบูต ต้องให้ systemd สร้าง socket ใหม่ตอนบูตทุกครั้ง. ฟีเจอร์นี้แยกจาก Pi Zero 2W (bare-metal) โดยสมบูรณ์ — ถ้าไม่ตั้ง `PIRADIO_POWEROFF_SOCKET` แอปจะ fallback ไปใช้ `sudo /sbin/poweroff` แบบเดิมของ deployment แบบไม่ใช้ Docker
+
+## 10. ติดตั้ง Wi‑Fi Fallback Hotspot (host-side)
+
+ฟีเจอร์นี้ทำงานบน **host OS** (ไม่ใช่ใน container) โดย `wifi-fallback.service` จะตรวจหลังบูตว่ามีเครือข่ายอินเทอร์เน็ตถึงหรือไม่ หากไม่ถึงภายในเวลาที่กำหนดจะเปิด hotspot ชื่อ `PiRadio-Setup` ให้อุปกรณ์อื่น (มือถือ/คอม) ต่อเข้าไปแล้วตั้งค่า Wi‑Fi จริงผ่านหน้าเว็บที่ `http://10.42.0.1:5000` (หรือ IP ของ hotspot)
+
+### หลักการทำงาน
+
+- Service รันหนึ่งครั้งตอนบูต (oneshot)
+- เช็คการเข้าถึงอินเทอร์เน็ตจริง (ping `8.8.8.8` / `1.1.1.1`) **ไม่ใช่แค่ดูว่า Wi‑Fi interface activated หรือไม่**
+- เช็คว่า ethernet ต่ออยู่และมีอินเทอร์เน็ตถึงก่อนเปิด hotspot
+- ใช้ state stamp (`/var/run/wifi-fallback-online.stamp`) ป้องกันการเปิด hotspot ซ้ำใน boot เดียวกัน
+- สคริปต์รุ่นนี้ (v2026-10-01) ป้องกัน hotspot เปิดผิดพลาดโดยเพิ่ม **ethernet check**, **internet reachability test**, **state stamp** และเวลา **90 วินาที**
+- ดูรายละเอียดเพิ่มเติมได้ที่ `~/radio-server/scripts/wifi-fallback.sh`
+
+> **สำคัญ**: hotspot นี้ไม่ได้ถูกติดตั้งอัตโนมัติใน Docker image ต้องติดตั้งบน host แยกต่างหากตามด้านล่าง
+
+### ก่อนเริ่ม
+
+ไฟล์ที่ใช้:
+- `~/radio-server/scripts/wifi-fallback.sh` — สคริปต์หลัก
+- `~/radio-server/scripts/wifi-fallback.service` — systemd unit
+
+(มากับ source ที่ scp ไปแล้วตามหัวข้อ 4)
+
+### ขั้นตอนติดตั้ง
+
+```bash
+cd ~/radio-server/scripts
+
+# (แนะนำ) เปลี่ยนรหัสผ่าน hotspot ก่อนติดตั้ง
+# sed -i 's/piradio1234/รหัสผ่านจริง/' wifi-fallback.sh
+
+sudo install -m 755 wifi-fallback.sh /usr/local/bin/wifi-fallback.sh
+sudo install -m 644 wifi-fallback.service /etc/systemd/system/wifi-fallback.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now wifi-fallback.service
+sudo systemctl status wifi-fallback.service --no-pager
+```
+
+### ตรวจสอบการทำงาน
+
+หลัง reboot รอประมาณ 2 นาที แล้วดู log:
+
+```bash
+sudo journalctl -u wifi-fallback.service -n 50 --no-pager
+```
+
+หากทุกอย่างปกติควรเห็นข้อความ:
+```
+[wifi-fallback] ... Internet is already reachable (ethernet or fast wifi). Hotspot not needed.
+```
+หรือ
+```
+[wifi-fallback] ... Internet reachable (via wifi or ethernet) after ~XXs. Hotspot not needed.
+```
+
+หากไม่เจอเครือข่ายเลยจะเห็น:
+```
+[wifi-fallback] ... Hotspot PiRadio-Setup is now active.
+```
+
+### การตั้งค่า Wi‑Fi จาก hotspot
+
+1. เปิด Wi‑Fi บนมือถือ/คอมพิวเตอร์
+2. เลือก SSID `PiRadio-Setup` ใส่รหัสผ่าน `piradio1234` (หรือรหัสที่เปลี่ยนไว้)
+3. เปิด browser ไปที่ `http://10.42.0.1:5000`
+4. เข้า Settings → Wi‑Fi → Scan → เลือก SSID จริง → กรอกรหัสผ่าน → Connect
+5. หน้าเว็บจะตัด hotspot และเชื่อมต่อ Wi‑Fi จริงให้อัตโนมัติ
+6. ครั้งถัดไปที่บูต host จะพยายามเชื่อมต่อ Wi‑Fi จริงโดยตรง
+
+### ข้อควรระวัง
+
+- **เปลี่ยนรหัสผ่าน hotspot ก่อนติดตั้ง**: ห้ามใช้รหัส `piradio1234` คาไว้ใน production
+- **Docker container ไม่เกี่ยวข้อง**: Wi‑Fi fallback นี้ทำงานบน host เท่านั้น Container ใช้ `network_mode: host` ดังนั้นเมื่อ host เชื่อมต่อ Wi‑Fi หรือเปิด hotspot ได้ container ก็จะใช้ network ตาม host อัตโนมัติ
+- **ไม่จำเป็นต้อง rebuild container**: การติดตั้งนี้แก้เฉพาะ host service ไม่เกี่ยวกับ Docker image
+- ถ้าใช้ ethernet หลักและไม่ต้องการ hotspot เลยให้ disable service ทิ้ง:
+  ```bash
+  sudo systemctl disable --now wifi-fallback.service
+  ```
+## คำสั่งใช้งานประจำ
+
+```bash
+cd ~/radio-server/Docker
+docker compose ps
+docker compose logs -f piradio
+docker compose restart piradio
+docker compose down
+docker compose up -d
+docker compose up -d --build
+```
+
+`restart: unless-stopped` ทำให้ container เริ่มใหม่หลัง Pi boot เมื่อ Docker service ทำงาน
+
+## อัปเดต source ภายหลัง
+
+1. ส่งไฟล์ที่เปลี่ยนจาก Windows ด้วย `scp` ตามหัวข้อ 4
+2. บน Pi รัน:
+
+   ```bash
+   cd ~/radio-server/Docker
+   docker compose up -d --build
+   docker compose logs --tail=100 piradio
+   ```
+
+อย่าลบ `Docker/data/` หากต้องการคงสถานี, รายการโปรด, playback mode และ audio state เดิม
+
+**สำคัญ**: Pi 3B ที่ deploy ด้วย Docker Compose ชุดนี้ **ไม่มี** systemd unit ชื่อ `radio.service` (unit นั้นมีเฉพาะ deployment แบบเก่าบน Pi Zero 2W ที่รัน Flask ตรง ๆ ด้วย `python`/`gunicorn`) ห้ามใช้ `sudo systemctl restart radio.service` เพื่อ deploy โค้ดใหม่บนเครื่องนี้ ให้ใช้ `docker compose up -d --build` เท่านั้น ดูหัวข้อ "Port 5000 ถูกใช้งานอยู่" ด้านล่างหากเจอ error `Unit radio.service not found`
+
+## ปัญหาที่พบบ่อย
+
+### `Failed to restart radio.service: Unit radio.service not found`
+
+เป็นเรื่องปกติบน Pi 3B ชุดนี้ เพราะ deploy ด้วย Docker Compose ไม่ได้ตั้ง systemd unit `radio.service` ไว้ (unit นี้มีเฉพาะ Pi เครื่องเก่าที่ยังไม่ dockerize) ให้ redeploy ด้วยคำสั่งนี้แทน:
+
+```bash
+cd ~/radio-server/Docker
+docker compose up -d --build
+docker compose logs --tail=100 piradio
+```
+
+### Port 5000 ถูกใช้งานอยู่
+
+หากเคยใช้ Flask ผ่าน `radio.service` อยู่แล้ว ให้หยุด service เก่าก่อน:
+
+```bash
+sudo systemctl disable --now radio.service
+```
+
+ตรวจ process ที่ใช้ port:
+
+```bash
+sudo ss -ltnp | grep 5000
+```
+
+### container ขึ้นแล้ว แต่ `/api/status` ส่ง `available: false`
+
+MPD host ไม่พร้อม หรือ `mpc` ใน container เชื่อม host MPD ไม่ได้. ตรวจตามลำดับ:
+
+```bash
+mpc status
+cd ~/radio-server/Docker
+docker compose exec piradio mpc status
+docker compose logs --tail=100 piradio
+```
+
+### ไม่มีเสียง
+
+Docker/Flask อาจทำงานปกติแต่ MPD ยังไม่มี audio output ที่ใช้งานได้. ตรวจ output, playback และ service:
+
+```bash
+mpc outputs
+mpc status
+sudo systemctl status mpd --no-pager
+```
+
+แก้ `/etc/mpd.conf` ตามอุปกรณ์เสียงจริง แล้ว restart MPD:
+
+```bash
+sudo systemctl restart mpd
+```
+
+### Bluetooth connect ได้ แต่ speaker ไม่มีเสียง
+
+ปัญหานี้มักเกิดเมื่อ pair/connect สำเร็จ แต่ยังไม่มี BlueALSA route, MPD output `Bluetooth Speaker` ไม่ถูกสร้าง หรือ MPD เปิด output ผิดตัว. ตรวจตามลำดับนี้:
+
+```bash
+bluetoothctl devices Connected
+sudo systemctl status bluealsa --no-pager
+aplay -L | grep -i bluealsa
+mpc outputs
+mpc status
+```
+
+แนวทางแก้:
+
+1. หากไม่มี speaker ใน `devices Connected` ให้ reconnect จากหน้าเว็บหรือ `bluetoothctl`
+2. หาก `bluealsa:` ไม่ปรากฏ ให้ติดตั้ง/เปิด `bluez-alsa-utils` และ `bluealsa` ตามหัวข้อ 8
+3. หาก `mpc outputs` ไม่มี `Bluetooth Speaker` ให้เพิ่ม block MPD ตามหัวข้อ 8 โดยใช้ค่าเริ่มต้น `00:00:00:00:00:00` แล้ว `sudo systemctl restart mpd`; MAC ของ speaker จะถูกอัปเดตอัตโนมัติเมื่อ Connect จากหน้าเว็บ โดย host helper ต้องเป็นเวอร์ชันใหม่ตามหัวข้อ 9
+4. หากมี output แล้วแต่ไม่ active ให้ `mpc enable <bluetooth-output-id>` และ disable output อื่นที่ไม่ต้องการ
+5. หาก `mpc status` ไม่แสดง `playing` ให้เลือกสถานีแล้วกด Play ใหม่จากหน้าเว็บ
+
+### Bluetooth ในเว็บขึ้น unavailable
+
+ตรวจ BlueZ บน host, D-Bus mount และ image ที่ build ใหม่ตามหัวข้อ 8:
+
+```bash
+sudo systemctl status bluetooth bluealsa --no-pager
+cd ~/radio-server/Docker
+docker compose exec piradio bluetoothctl show
+curl -fsS http://127.0.0.1:5000/api/bluetooth/status
+```
+
+หากขึ้น `bluetoothctl: executable file not found in $PATH` ให้ทำ rebuild แบบเต็มตามหัวข้อ 8; container กำลังใช้ image เก่าที่ไม่มี package `bluez`
+
+หาก `bluetoothctl show` บน host หรือใน container ไม่พบ controller ให้ตรวจว่าถูก block หรือไม่:
+
+```bash
+rfkill list bluetooth
+sudo rfkill unblock bluetooth
+```
+
+### Wi-Fi ในเว็บขึ้น unavailable
+
+เป็นพฤติกรรมที่คาดไว้เฉพาะกรณีที่ Docker image เก่า (ก่อนเพิ่ม `network-manager` package) หรือยังไม่ได้ rebuild image ด้วย `docker compose up -d --build`
+
+**วิธีแก้**: rebuild image ด้วยคำสั่ง:
+
+```bash
+cd ~/radio-server/Docker
+docker compose up -d --build
+```
+
+หลัง rebuild หน้า Wi‑Fi จะทำงานได้ปกติ ถ้ายังไม่ขึ้นให้ตรวจ:
+
+```bash
+docker compose exec piradio which nmcli
+docker compose exec piradio nmcli general status
+```
+
+หรือติดตั้ง Wi‑Fi fallback hotspot **บน host** (ไม่ใช่ใน container) ตามหัวข้อ 10
+
+### กด Power Off แล้วไม่มีอะไรเกิดขึ้น
+
+มักเกิดจากยังไม่ได้ติดตั้ง/enable poweroff helper บน host ตามหัวข้อ 9 หรือ container มองไม่เห็น socket ตรวจตามลำดับ:
+
+```bash
+sudo systemctl status piradio-poweroff-helper.service --no-pager
+ls -l /run/piradio/poweroff.sock
+cd ~/radio-server/Docker
+docker compose exec piradio ls -l /run/piradio/
+grep PIRADIO_POWEROFF_SOCKET compose.yaml
+curl -fsS http://127.0.0.1:5000/api/poweroff
+```
+
+1. หาก service ไม่ `active` ให้ `sudo systemctl enable --now piradio-poweroff-helper.service` ใหม่ แล้วดู log ด้วย `journalctl -u piradio-poweroff-helper.service -n 50 --no-pager`
+2. หาก socket ไม่มีบน host เลย (`/run/piradio/poweroff.sock`) แปลว่า service ยังไม่เคย start สำเร็จ หรือเพิ่งรีบูตแล้ว service ไม่ได้ enable ไว้ (ดูหัวข้อ 9)
+3. หาก socket มีบน host แต่ container มองไม่เห็น (`docker compose exec piradio ls -l /run/piradio/` ว่างเปล่า) แปลว่า `compose.yaml` ยังไม่มี bind mount `/run/piradio:/run/piradio` หรือยังไม่ได้ rebuild container หลังแก้ ให้ `docker compose up -d --build` ใหม่
+4. `curl .../api/poweroff` ตอบ `{"status": "unavailable"}` แปลว่า container เชื่อมต่อ socket ไม่ได้ (permission หรือ path ผิด) ส่วน `{"status": "shutting down"}` แปลว่าคำสั่งไปถึง helper แล้วและเครื่องกำลังจะปิดจริง
+
+### รีสตาร์ต/ปิดเครื่องแล้วไม่กลับมาเล่นสถานีวิทยุ หรือ output เดิม (เล่นเพลงจาก media server/DLNA ค้างมาแทน)
+
+แอปจะจำ output (jack/bluetooth) และสถานีวิทยุล่าสุดไว้ใน `Docker/data/audio_state.json` แล้ว resume อัตโนมัติตอนบูตผ่าน `restore_last_audio_output()` ใน `app.py` ปัญหานี้เคยเกิดจาก MPD เองมีกลไก auto-resume คิวเพลงเดิมของตัวเอง (จาก `state_file` ใน `mpd.conf`) ซึ่งอาจ resume เพลงจาก DLNA/media server ค้างไว้ก่อนที่แอปจะเข้ามา override ทัน (เช่น MPD ยังไม่พร้อมตอนแอปพยายาม resume) โค้ดปัจจุบันแก้แล้วด้วยการรอ MPD พร้อมจริงก่อน (`wait_for_mpd()`) และ retry คำสั่ง resume สถานีสูงสุด 3 ครั้ง หากยังเจอปัญหานี้อยู่ ให้ตรวจตามลำดับ:
+
+```bash
+cat ~/radio-server/Docker/data/audio_state.json
+cd ~/radio-server/Docker
+docker compose logs --tail=200 piradio | grep -i -E "mpd|mpc|restore"
+mpc status
+mpc outputs
+```
+
+1. ตรวจว่า `audio_state.json` มี `last_station_id` ตรงกับสถานีที่เล่นค้างไว้ก่อน poweroff จริงหรือไม่ (ถ้าไม่มี/เป็น `null` แสดงว่า `/api/play/<id>` ยังไม่เคยถูกเรียกสำเร็จ หรือถูก `/api/stop` เคลียร์ไปก่อนปิดเครื่อง)
+2. ถ้า `last_station_id` ถูกต้องแต่ยังไม่ resume ให้ตรวจว่า container/`app.py` เป็นเวอร์ชันล่าสุดที่มี `wait_for_mpd()` และ `mpc_cmd()` เช็ค returncode จริง (ไม่ใช่เวอร์ชันเก่าที่ `mpc_cmd()` return `True` เสมอ) ให้ redeploy ตามหัวข้อ "อัปเดต source ภายหลัง"
+3. ถ้ายังไม่หาย ให้ปิด auto-resume ของ MPD เองใน `/etc/mpd.conf` (ลบ/คอมเมนต์บรรทัด `state_file`) แล้ว `sudo systemctl restart mpd` เพื่อไม่ให้ MPD แข่ง resume คิวเก่าของตัวเอง
+
+## Rollback กลับไปใช้ service เดิม
+
+หากต้องกลับไปใช้งานแบบเดิม:
+
+```bash
+cd ~/radio-server/Docker
+docker compose down
+sudo systemctl enable --now radio.service
+```
+
+ตรวจว่า `radio.service` ถูกตั้งให้รัน source path ที่ถูกต้องก่อน enable. หาก service เดิมไม่ได้อยู่บน Pi 3B เครื่องนี้ ให้ข้ามขั้นตอน rollback ได้

@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi Radio poweroff helper (lets the Docker container request a real host shutdown)
+After=network.target
+
+[Service]
+Type=simple
+RuntimeDirectory=piradio
+RuntimeDirectoryMode=0755
+ExecStart=/usr/bin/python3 /usr/local/bin/piradio-poweroff-helper.py
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
